@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  api:
+    image: leoezinhos-api:latest
+    env_file: .env
+    networks:
+      - menucciNet
+    deploy:
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.leoezinhos-api.entrypoints=websecure"
+        - "traefik.http.routers.leoezinhos-api.rule=Host(`api-leoezinhos.menuccisd.com.br`)"
+        - "traefik.http.routers.leoezinhos-api.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.leoezinhos-api.loadbalancer.server.port=3000"
+networks:
+  menucciNet:
+    external: true

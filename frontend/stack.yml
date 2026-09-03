@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  app:
+    image: leoezinhos-app:latest
+    networks:
+      - menucciNet
+    deploy:
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.leoezinhos-app.entrypoints=websecure"
+        - "traefik.http.routers.leoezinhos-app.rule=Host(`app-leoezinhos.menuccisd.com.br`)"
+        - "traefik.http.routers.leoezinhos-app.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.leoezinhos-app.loadbalancer.server.port=80"
+networks:
+  menucciNet:
+    external: true

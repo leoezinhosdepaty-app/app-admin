@@ -1,0 +1,33 @@
+# segredos - nunca commitar
+.env
+.env.*
+!.env.example
+
+# dependências e build (cada pasta já tem o próprio .gitignore também)
+node_modules/
+dist/
+dist-ssr/
+
+# config local do Claude Code (pessoal desta máquina)
+.claude/settings.local.json
+
+# SO / editor
+.DS_Store
+Thumbs.db
+
+# --- arquivos soltos na raiz: documentos pessoais, dados sensíveis e
+# protótipos antigos que não fazem parte do app (backend/ e frontend/
+# são o código de verdade). Continuam no disco, só não entram no git. ---
+/*.docx
+/*.pdf
+/*.xlsx
+/*.csv
+/*.jpeg
+/*.jpg
+/*.png
+/*.zip
+/*.sql
+/App-Pricila-Pereira-Prototipo.jsx
+/App-Pricila-Pereira-Supabase.jsx
+/infinitepay.js
+/Contrato_Template_Leoezinhos.md
