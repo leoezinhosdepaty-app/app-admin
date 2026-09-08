@@ -4,7 +4,7 @@ import { criarLink } from "./infinitepay.js";
 import { montarTextoContrato, montarTextoParaLeitura, gerarESalvarContrato } from "./contrato.js";
 
 export const router = express.Router();
-router.use(express.json());
+router.use(express.json({ limit: "5mb" })); // rota pública recebe foto do aluno em base64 — 100kb (padrão) estoura fácil
 
 async function buscarConvite(token) {
   const { data: convite } = await db.from("convites").select("*").eq("token", token).maybeSingle();
@@ -256,6 +256,9 @@ router.post("/api/publico/convite/:token/contrato", async (req, res) => {
     assinado_em: new Date().toISOString(), ip, user_agent: userAgent, hash_sha256: salvo.hash,
   }, { onConflict: "aluno_id,tipo" });
   if (erroDoc) return res.status(400).json({ error: erroDoc.message });
+
+  // contrato assinado é a última etapa do processo — sai de "pendente" pra "ativo"
+  await db.from("alunos").update({ status: "ativo" }).eq("id", aluno.id).eq("status", "pendente");
 
   const resultado = { contrato_url: salvo.url };
 

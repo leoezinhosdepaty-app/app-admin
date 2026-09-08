@@ -16,7 +16,7 @@ function Casca({ children }) {
   return (
     <div className="min-h-screen p-4 sm:p-8" style={{ background: SAND }}>
       <div className="mx-auto max-w-xl">
-        <img src="/logo-leoezinhos.jpeg" alt="Leõezinhos" className="h-14 w-14" />
+        <img src="/logo-leoezinhos.png" alt="Leõezinhos" className="h-14 w-auto" />
         <div className="mt-3 rounded-3xl bg-white p-5 sm:p-6" style={{ boxShadow: "0 1px 2px rgba(14,31,73,.08), 0 8px 24px -18px rgba(14,31,73,.5)" }}>
           {children}
         </div>

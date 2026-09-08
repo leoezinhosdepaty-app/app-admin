@@ -24,7 +24,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center p-4" style={{ background: SAND }}>
       <form onSubmit={entrar} className="w-full max-w-sm rounded-3xl bg-white p-6"
         style={{ boxShadow: "0 1px 2px rgba(14,31,73,.08), 0 8px 24px -18px rgba(14,31,73,.5)" }}>
-        <img src="/logo-leoezinhos.jpeg" alt="Leõezinhos" className="mx-auto mb-3 h-20 w-20" />
+        <img src="/logo-leoezinhos.png" alt="Leõezinhos" className="mx-auto mb-3 h-20 w-auto" />
         <h1 className="mt-1 text-center text-xl font-bold" style={{ color: NAVY }}>Gestão Priscila Pereira</h1>
         <p className="mb-6 text-center text-sm" style={{ color: "#5C678A" }}>Leõezinhos · Futebol</p>
 

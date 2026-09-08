@@ -253,6 +253,38 @@ A Priscila perguntou "como está a rotina de cobrança" no primeiro dia de setem
 - **Corrigido em seguida (2026-09-01):** `gerarCobrancasDoMes` e `reguaInadimplencia` (`backend/src/index.js`) ganharam `{ timezone: "America/Sao_Paulo" }` explícito também, então agora os 3 crons (cobrança 07h, régua 09h, aniversário 08h) realmente rodam nesses horários em Brasília — antes rodavam ~3h mais cedo (horário do container, UTC).
 - Testado contra o banco de produção (sem nenhum aniversariante no dia, então rodou sem inserir nada — confirma que a query e as junções funcionam sem erro).
 
+## Correção: recorte de foto "desregulava" no zoom + edição completa da matrícula (2026-09-08)
+
+- **Bug do zoom no recorte de foto (`frontend/src/SeletorFoto.jsx`):** a causa real não era a lógica de zoom em si, era o CSS global do Tailwind (`img { max-width: 100%; height: auto }`) sobrepondo o tamanho que o componente calculava — a imagem nunca crescia de verdade além do tamanho do círculo, então o zoom não tinha efeito visual real e a posição ficava toda desalinhada. Corrigido com `maxWidth: "none", maxHeight: "none"` explícito no estilo da imagem. Testei programaticamente (injetando uma imagem via JS no formulário público local): antes o elemento ficava travado em 260×260px não importa o zoom; depois passou a dobrar de tamanho corretamente (520×260 → 1040×520 ao ir de zoom 1x pra 2x).
+- De quebra, também adicionei um **limite de arraste**: antes dava pra arrastar a foto pra fora da área e sobrar fundo cinza vazio dentro do círculo; agora o arraste é travado pra imagem sempre cobrir o círculo inteiro, e esse limite é recalculado tanto ao arrastar quanto ao mexer no zoom.
+- **Edição de matrícula (`frontend/src/App.jsx`, modal "Editar dados do aluno" na Ficha):** não dava pra editar plano, valor da mensalidade nem dia de vencimento — só existiam campos do aluno em si. Adicionei os 3 campos (Plano com select vindo da tabela `planos`, Valor da mensalidade, Dia do vencimento), só aparecem quando o aluno já tem uma matrícula ativa. Ao salvar, atualiza a linha correspondente em `matriculas` além dos dados do aluno.
+
+## Logo sem fundo branco + maior no menu lateral (2026-09-08)
+
+- A logo original (`logo-leoezinhos.jpeg`) era um JPEG — sem suporte a transparência — com um quadrado branco/cinza-claro por trás do escudo. Ficava feio contra o fundo azul-marinho do menu lateral (e também contra o fundo "areia" da página de convite).
+- Removi o fundo com Python/Pillow (preenchimento a partir dos 4 cantos, sem mexer no branco que já fazia parte do desenho — letras, bola), suavizei a borda do recorte, e salvei como `frontend/public/logo-leoezinhos.png` (com transparência de verdade).
+- Troquei as 4 referências no código (`App.jsx` × 2, `Login.jsx`, `paginas/Convite.jsx`) pro `.png` novo, aumentei a logo do menu lateral (`h-14` → `h-24`) e troquei `w-14`/`w-9`/`w-20` fixo por `w-auto` em todas — a imagem tinha proporção retangular (1193×1319) e estava sendo espremida num quadrado.
+- O arquivo `.jpeg` antigo continua no disco (não uso mais, mas não apaguei).
+
+## Correção: erro "invalid input syntax for type uuid: undefined" ao salvar matrícula (2026-09-08)
+
+- Bug relatado com o Arthur Pena: ao editar e salvar a Ficha do aluno, dava esse erro.
+- Causa: a consulta `qAlunos` (`frontend/src/App.jsx`) buscava `matriculas ( valor_mensalidade, dia_vencimento, ativa, planos ( nome ) )` — sem o `id` nem o `plano_id` da matrícula. Como o salvamento faz `.eq("id", mat.id)`, com `mat.id` undefined isso virava `id=eq.undefined` na URL da requisição, e o Postgres rejeitava porque "undefined" não é um UUID válido.
+- Fix: incluí `id` e `plano_id` no select de `matriculas`.
+
+## Regra do status "pendente" — por que travava e como foi ajustada (2026-09-08)
+
+- **O que causava:** todo aluno novo nasce com `status: "pendente"` — tanto o cadastro rápido "Novo Aluno" do painel quanto o processo público de matrícula criam assim. O problema: **não existia nenhum código em lugar nenhum que tirasse o aluno do "pendente"**. O único status que o sistema promove automaticamente é `inadimplente → ativo` (quando o pagamento é confirmado) — mas isso nunca ajudava quem estava em "pendente", porque pra virar "inadimplente" primeiro precisa ter sido "ativo". Ou seja: uma vez pendente, ficava pendente pra sempre, a não ser que alguém corrigisse manualmente no banco (foi assim que percebemos, com o caso da Nara e Nicole Santos).
+- **Regra nova:** `backend/src/publico.js`, na rota de assinatura de contrato (`POST /api/publico/convite/:token/contrato`) — que é a última etapa do processo (matrícula → anamnese → contrato) — agora também promove `pendente → ativo` automaticamente assim que o contrato é assinado. Conferi os 9 alunos que estavam "pendente" hoje: nenhum tinha contrato assinado ainda, então não precisou corrigir nada retroativamente — a regra nova já cobre o que falta pra eles.
+- **Ficha do aluno, campos de matrícula sempre visíveis:** os campos Plano / Valor da mensalidade / Dia do vencimento no modal "Editar dados do aluno" (`frontend/src/App.jsx`) antes só apareciam se o aluno já tivesse uma matrícula ativa — agora aparecem sempre, mesmo sem matrícula nenhuma ainda (comum em quem está "pendente"). Ao salvar, cria a matrícula se não existir, ou atualiza se já existir.
+
+## Correção: erro 413 ao enviar a Ficha de Matrícula com foto (2026-09-03)
+
+- Bug: formulário público de matrícula dava **"Erro 413"** ao tentar enviar quando o aluno tinha foto (relatado com o cadastro do Arthur Pena, MPAC).
+- Causa: `backend/src/publico.js` usava `express.json()` sem limite — o padrão do Express é **100kb**, e a foto do rosto em base64 (mesmo só 480×480px) passa disso fácil em fotos mais "cheias" de detalhe.
+- Fix: `express.json({ limit: "5mb" })` só nessa rota pública (as outras rotas do backend não recebem foto, não precisam do limite maior).
+- Publicado e confirmado no container em produção.
+
 ## Correção: rolagem gigante na tela de Conversas (2026-09-01)
 
 - Bug: a lista de contatos e a conversa não tinham nenhum limite de altura, então a tela crescia pra caber tudo — virava uma barra de rolagem enorme da página inteira em vez de rolar só dentro de cada painel.

@@ -18,6 +18,22 @@ function ModalRecorte({ src, fechar, onConfirmar, cor }) {
   const imgRef = useRef(null);
   const [dimensoes, setDimensoes] = useState(null); // { largura, altura } naturais
 
+  const escalaBase = dimensoes ? QUADRO / Math.min(dimensoes.largura, dimensoes.altura) : 1;
+  const escala = escalaBase * zoom;
+
+  // limite de arraste: a imagem exibida nunca pode deixar de cobrir o quadro,
+  // senão aparece fundo vazio atrás dela — o limite muda com o zoom, por isso
+  // recebe a escala como parâmetro (precisa recalcular tanto ao arrastar quanto ao dar zoom).
+  const limitarPos = (p, escalaAtual) => {
+    if (!dimensoes) return p;
+    const limiteX = Math.max(0, (dimensoes.largura * escalaAtual - QUADRO) / 2);
+    const limiteY = Math.max(0, (dimensoes.altura * escalaAtual - QUADRO) / 2);
+    return {
+      x: Math.min(limiteX, Math.max(-limiteX, p.x)),
+      y: Math.min(limiteY, Math.max(-limiteY, p.y)),
+    };
+  };
+
   const iniciar = (e) => {
     arrastando.current = true;
     ultimo.current = pontoDoEvento(e);
@@ -25,13 +41,15 @@ function ModalRecorte({ src, fechar, onConfirmar, cor }) {
   const mover = (e) => {
     if (!arrastando.current) return;
     const p = pontoDoEvento(e);
-    setPos((v) => ({ x: v.x + (p.x - ultimo.current.x), y: v.y + (p.y - ultimo.current.y) }));
+    setPos((v) => limitarPos({ x: v.x + (p.x - ultimo.current.x), y: v.y + (p.y - ultimo.current.y) }, escala));
     ultimo.current = p;
   };
   const parar = () => { arrastando.current = false; };
 
-  const escalaBase = dimensoes ? QUADRO / Math.min(dimensoes.largura, dimensoes.altura) : 1;
-  const escala = escalaBase * zoom;
+  const mudarZoom = (novoZoom) => {
+    setPos((v) => limitarPos(v, escalaBase * novoZoom));
+    setZoom(novoZoom);
+  };
 
   const confirmar = () => {
     const img = imgRef.current;
@@ -70,11 +88,12 @@ function ModalRecorte({ src, fechar, onConfirmar, cor }) {
               position: "absolute",
               left: "50%", top: "50%",
               width: dimensoes.largura * escala, height: dimensoes.altura * escala,
+              maxWidth: "none", maxHeight: "none",
               transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))`,
             } : { display: "none" }}
           />
         </div>
-        <input type="range" min="1" max="3" step="0.01" value={zoom} onChange={(e) => setZoom(Number(e.target.value))}
+        <input type="range" min="1" max="3" step="0.01" value={zoom} onChange={(e) => mudarZoom(Number(e.target.value))}
           className="mt-4 w-full" />
         <div className="mt-3 flex gap-2">
           <button type="button" onClick={confirmar} disabled={!dimensoes}

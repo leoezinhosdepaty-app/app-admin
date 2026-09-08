@@ -112,7 +112,7 @@ const qAlunos = () => supabase
   .select(`id, nome, nascimento, categoria, tamanho_uniforme, bolsista, status, observacoes, foto_url,
            responsaveis ( id, nome, telefone, cpf, email ),
            turmas ( id, dias, horario, locais ( id, nome ) ),
-           matriculas ( valor_mensalidade, dia_vencimento, ativa, planos ( nome ) ),
+           matriculas ( id, plano_id, valor_mensalidade, dia_vencimento, ativa, planos ( nome ) ),
            documentos ( tipo, assinado_em ),
            anamneses ( doenca_preexistente, problema_fisico, condicao_neurologica, remedio_controlado,
                        plano_saude, cartao_sus, contato_emergencia, autoriza_medico, preenchida_em ),
@@ -140,6 +140,9 @@ const qEventos = () => supabase
 
 const qTurmasAtivas = () => supabase
   .from("turmas").select("id, dias, horario, locais ( nome )").eq("ativo", true);
+
+const qPlanosAtivos = () => supabase
+  .from("planos").select("id, nome, frequencia_semanal, valor").eq("ativo", true).order("valor");
 
 const qLocaisAtivos = () => supabase
   .from("locais").select("id, nome").eq("ativo", true).order("nome");
@@ -583,6 +586,7 @@ function Ficha({ a, fechar, recarregar }) {
   const mat = a.matriculas?.find((m) => m.ativa);
   const pend = pendenciasDe(a);
   const { dados: turmas } = useQuery("turmas-ativas", qTurmasAtivas);
+  const { dados: planos } = useQuery("planos-ativos", qPlanosAtivos);
   const [gerando, setGerando] = useState(false);
   const [editando, setEditando] = useState(false);
   const [descricao, setDescricao] = useState(mat ? `Mensalidade - ${a.nome}` : `Cobrança avulsa - ${a.nome}`);
@@ -910,6 +914,12 @@ function Ficha({ a, fechar, recarregar }) {
               opcoes: (turmas ?? []).map((t) => ({ value: t.id, label: `${t.locais?.nome} · ${t.dias} · ${String(t.horario).slice(0, 5)}` })),
             },
             { chave: "bolsista", label: "Bolsista", tipo: "checkbox", padrao: !!a.bolsista },
+            {
+              chave: "plano_id", label: "Plano", tipo: "select", padrao: mat?.plano_id ?? "",
+              opcoes: (planos ?? []).map((p) => ({ value: p.id, label: `${p.nome} — ${brl(p.valor)} (${p.frequencia_semanal}x/semana)` })),
+            },
+            { chave: "valor_mensalidade", label: "Valor da mensalidade (R$)", tipo: "number", padrao: String(mat?.valor_mensalidade ?? "0") },
+            { chave: "dia_vencimento", label: "Dia do vencimento", tipo: "number", padrao: String(mat?.dia_vencimento ?? "15") },
             { chave: "responsavel_nome", label: "Nome do responsável", obrigatorio: true, padrao: a.responsaveis?.nome ?? "" },
             { chave: "responsavel_telefone", label: "Telefone do responsável", obrigatorio: true, padrao: a.responsaveis?.telefone ?? "" },
             { chave: "responsavel_cpf", label: "CPF do responsável", padrao: a.responsaveis?.cpf ?? "" },
@@ -921,6 +931,15 @@ function Ficha({ a, fechar, recarregar }) {
               tamanho_uniforme: v.tamanho_uniforme || null, turma_id: v.turma_id || null, bolsista: v.bolsista,
             }).eq("id", a.id);
             if (e1) throw e1;
+            const dadosMatricula = {
+              plano_id: v.plano_id || null,
+              valor_mensalidade: v.valor_mensalidade ? Number(v.valor_mensalidade) : 0,
+              dia_vencimento: Number(v.dia_vencimento) || 15,
+            };
+            const { error: e3 } = mat
+              ? await supabase.from("matriculas").update(dadosMatricula).eq("id", mat.id)
+              : await supabase.from("matriculas").insert({ ...dadosMatricula, aluno_id: a.id, ativa: true });
+            if (e3) throw e3;
             if (a.responsaveis?.id) {
               const { error: e2 } = await supabase.from("responsaveis").update({
                 nome: v.responsavel_nome, telefone: v.responsavel_telefone,
@@ -2003,7 +2022,7 @@ export default function App({ sessao }) {
     <div className="min-h-screen pb-24 lg:flex lg:pb-0" style={{ background: SAND }}>
       <aside className="hidden w-60 shrink-0 flex-col p-4 lg:flex" style={{ background: NAVY }}>
         <div className="mb-6 px-2">
-          <img src="/logo-leoezinhos.jpeg" alt="Leõezinhos" className="mb-2 h-14 w-14" />
+          <img src="/logo-leoezinhos.png" alt="Leõezinhos" className="mb-2 h-24 w-auto" />
           <p className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: LIME }}>Gestão</p>
           <p className="text-lg font-bold text-white">Priscila Pereira</p>
           <p className="text-xs text-white opacity-60">Leõezinhos · Futebol</p>
@@ -2038,7 +2057,7 @@ export default function App({ sessao }) {
       <main className="mx-auto w-full max-w-4xl p-4 lg:p-8">
         <div className="mb-4 flex items-center justify-between lg:hidden">
           <div className="flex items-center gap-2">
-            <img src="/logo-leoezinhos.jpeg" alt="Leõezinhos" className="h-9 w-9" />
+            <img src="/logo-leoezinhos.png" alt="Leõezinhos" className="h-9 w-auto" />
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: CLAY }}>Gestão</p>
               <p className="text-lg font-bold" style={{ color: NAVY }}>Priscila Pereira</p>
