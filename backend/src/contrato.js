@@ -53,7 +53,9 @@ export function montarTextoContrato({ aluno, responsavel, turma, local, plano, m
   const dados = {
     ...unidade,
     aluno_nome: aluno.nome,
-    aluno_nascimento: aluno.nascimento ? new Date(aluno.nascimento).toLocaleDateString("pt-BR") : "—",
+    // "YYYY-MM-DD" não tem hora — reformata direto, sem passar por new Date()
+    // (senão vira meia-noite UTC e mostra um dia a menos no fuso do Brasil)
+    aluno_nascimento: aluno.nascimento ? aluno.nascimento.slice(0, 10).split("-").reverse().join("/") : "—",
     responsavel_nome: responsavel.nome,
     responsavel_rg: responsavel.rg,
     responsavel_cpf: responsavel.cpf,
@@ -72,10 +74,12 @@ export function montarTextoContrato({ aluno, responsavel, turma, local, plano, m
     data_fim_vigencia: "12 (doze) meses da data de assinatura, renovando-se automaticamente por períodos iguais salvo rescisão",
     autoriza_imagem: autorizaImagem ? "AUTORIZA" : "NÃO AUTORIZA",
     cidade: unidade.comarca.split("/")[0],
-    data_assinatura: hoje.toLocaleDateString("pt-BR"),
+    // servidor roda em UTC — sem timeZone explícito, um contrato assinado à noite
+    // (horário de Brasília) mostraria a data do dia seguinte.
+    data_assinatura: hoje.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
     professor_nome: REPRESENTANTE.nome,
     professor_cref: REPRESENTANTE.cref || "—",
-    assinatura_datahora: hoje.toLocaleString("pt-BR"),
+    assinatura_datahora: hoje.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
     assinatura_ip: "{{__IP__}}",
     assinatura_useragent: "{{__UA__}}",
     documento_hash: "{{__HASH__}}",

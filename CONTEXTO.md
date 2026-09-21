@@ -253,6 +253,76 @@ A Priscila perguntou "como está a rotina de cobrança" no primeiro dia de setem
 - **Corrigido em seguida (2026-09-01):** `gerarCobrancasDoMes` e `reguaInadimplencia` (`backend/src/index.js`) ganharam `{ timezone: "America/Sao_Paulo" }` explícito também, então agora os 3 crons (cobrança 07h, régua 09h, aniversário 08h) realmente rodam nesses horários em Brasília — antes rodavam ~3h mais cedo (horário do container, UTC).
 - Testado contra o banco de produção (sem nenhum aniversariante no dia, então rodou sem inserir nada — confirma que a query e as junções funcionam sem erro).
 
+## Conferência manual completa com os relatórios da InfinitePay (INSA + MPAC) — 2026-09-20
+
+Reconciliação linha a linha dos relatórios de movimentação/vendas da InfinitePay (INSA e MPAC) contra as cobranças do sistema. Achados e correções, além do que já está descrito abaixo:
+
+- **Cartão de crédito: o "NSU" do relatório BATE com o `id_externo` que a gente grava** (formato UUID igual) — diferente do Pix, onde os formatos são diferentes e não dá pra cruzar por ID (ver lição abaixo). Sempre que a linha for "Crédito", vale conferir por NSU primeiro — é prova real, não palpite por nome.
+- **Bernardo Souto Ferreira Chagas / Bernardo S Duarte eram cadastros duplicados do mesmo aluno** (mesmo telefone da família) — mesclados num só, ficou com o nome "Bernardo S Duarte", mantendo o histórico mais completo (anamnese, contrato, matrícula, pagamento).
+- **3 pagamentos do MPAC reconciliados** (todos via "Gestão de Cobrança" da InfinitePay, fora do nosso link — por isso nunca caíram sozinhos): Théo Carneiro (pago 09/09), Emanuel Borges (pago 11/09), Arthur Pena (pago 20/09).
+- **Tainara da Silva Esteves de Oliveira** (Pix R$160, 04/09) — não identificada, não é responsável de ninguém cadastrado. Fica pendente até a Priscila identificar.
+- Sonia A P Damasceno (R$159,73, 19/09) — não era mensalidade, foi compra de uniforme. Ignorar.
+- Adicionei o nome (e telefone) do responsável em toda exibição de cobrança (lista do Financeiro, card de Inadimplentes, modal de detalhe) — facilita muito conferir contra relatório da InfinitePay visualmente.
+
+## Lição: cruzar relatório da InfinitePay por nome é arriscado — achei um duplicado (2026-09-20)
+
+Ao tentar bater o relatório de movimentações da InfinitePay (CSV) com as cobranças do sistema, errei uma: identifiquei um Pix como sendo do "Bernardo Souto Ferreira Chagas" quando na verdade era do **"Bernardo S Duarte"** — a Priscila corrigiu.
+
+**Causa da confusão: são dois cadastros duplicados do mesmo aluno.** `Bernardo Souto Ferreira Chagas` (responsável "José Mario Bernardo S Duarte") e `Bernardo S Duarte` (responsável "Graziele Duarte Bauer santos") têm **o mesmo telefone cadastrado** (`5524981160568` / `24 98116-0568`) — quase certamente pai e mãe da mesma criança, cadastrados duas vezes com nomes ligeiramente diferentes. A família pagou uma mensalidade só, mas como tinha dois registros, cada um com sua própria cobrança de setembro, dava a impressão de que um pagou e o outro não. **Cancelei a cobrança duplicada do "Bernardo S Duarte"** — não é uma dívida real. Vale considerar mesclar/apagar um dos dois cadastros quando sobrar tempo, pra não confundir de novo.
+
+**Limitação técnica descoberta:** tentei usar o número "NSU" que aparece no relatório da InfinitePay pra bater com o `id_externo` que a gente grava no banco — **os formatos são diferentes** (o nosso é um UUID tipo `5d24f232-...`, o da InfinitePay é um número tipo `2741214665`) — não são o mesmo campo, não dá pra cruzar diretamente por ID. Então a única forma de conferir manualmente é por nome + valor + data, que é exatamente o que causou o erro do Bernardo (o nome de quem paga o Pix nem sempre é o nome do responsável cadastrado — pode ser cônjuge, avó, etc.).
+
+**Melhoria feita:** adicionei o nome (e telefone) do responsável em todo lugar que mostra uma cobrança — lista do Financeiro, card de Inadimplentes, e o modal de detalhe da cobrança (`frontend/src/App.jsx`). Ajuda a conferir mais rápido visualmente contra o relatório da InfinitePay.
+
+## Card "Previsto no mês" do Painel mostrava quase o dobro do valor real (2026-09-20)
+
+- Bug: o card somava a mensalidade de **todo mundo que tem uma matrícula com `ativa=true`**, sem checar se o aluno em si ainda está com status "ativo". 12 alunos que já estão inativos (desistiram) continuavam com a matrícula deles marcada `ativa=true` no banco — nunca foi desativada quando eles saíram. Isso inflava o "Previsto no mês" de R$ 5.800 (valor real) pra R$ 10.240 (quase o dobro).
+- Fix: `frontend/src/App.jsx` (`Painel`) — o cálculo do `previsto` agora só soma alunos com `status === "ativo"`. Também desativei as 12 matrículas órfãs no banco (não afeta cobrança nenhuma, já que a rotina de cobrança já checava o status do aluno separadamente — isso era só um problema de exibição no card).
+- O card "Em atraso" foi conferido e **não** tinha esse problema (já filtra certo pelo status da cobrança).
+
+## Bug de fuso horário: datas mostradas com 1 dia a menos (2026-09-20)
+
+Achado ao investigar reclamação de que a lista de Inadimplentes "não limpou" — o vencimento aparecia como 14/09 quando no banco estava 15/09.
+
+**Causa:** datas puras tipo "2026-09-15" (sem hora) não podem passar por `new Date(...)` — o JavaScript interpreta como meia-noite **UTC**, e ao formatar de volta pro fuso local (Brasília, UTC-3) isso vira 21h do dia anterior, mostrando um dia a menos. Achado em vários lugares:
+
+- `frontend/src/App.jsx`: `dataBr()` (usada pra vencimento, nascimento, etc. em toda a tela), `idade()` (cálculo de idade), e o filtro de "Aniversário hoje" do Painel — todos construíam um `Date` a partir da string pura.
+- `backend/src/contrato.js`: a data de nascimento impressa no contrato tinha o mesmo problema; e a data/hora de assinatura (`hoje.toLocaleDateString()`/`toLocaleString()`) usava o fuso do servidor (UTC, container não tem `TZ` configurado) em vez de horário de Brasília — um contrato assinado à noite podia sair com a data do dia seguinte no PDF.
+
+**Fix:** datas puras agora são reformatadas direto da string ("YYYY-MM-DD" → "DD/MM/YYYY"), sem passar por `Date`/fuso nenhum. Nos lugares do backend que realmente precisam da hora atual, adicionei `{ timeZone: "America/Sao_Paulo" }` explícito.
+
+**Importante:** isso era só um problema de **exibição** — os cálculos automáticos (rotina de cobrança, régua de inadimplência) já comparavam datas em UTC de forma consistente por trás dos panos, então não geravam cobrança no dia errado nem coisa assim. Só a tela mostrava a data errada pra quem está olhando do Brasil.
+
+## 🚨 Revisão completa do módulo Financeiro — causa real das reclamações de cobrança pós-pagamento (2026-09-20)
+
+Motivo: vários responsáveis reclamando que continuam recebendo cobrança mesmo tendo pago (José Mario, Juliana Penna, e possivelmente a família Moura), e os cards do Financeiro não batendo com a realidade.
+
+**Causa raiz encontrada:** `FichaCobranca` (o formulário de editar uma cobrança na tela Financeiro) deixa mudar o status pra "pago" com um simples `<select>`, mas fazia só um `update` cru na tabela — **não fazia nada do que o webhook de verdade faz** quando um pagamento é confirmado: não gravava `pago_em`/`metodo`, não cancelava lembretes de atraso ainda na fila, e principalmente **não voltava o status do aluno de "inadimplente" pra "ativo"**.
+
+Isso é usado o tempo todo porque o webhook da InfinitePay não é 100% confiável (já documentado antes nesse arquivo) — então, na prática, sempre que alguém confirmava um pagamento manualmente (por já saber que o cliente pagou, via PIX direto/print/etc.), a cobrança ficava "paga" mas **o aluno continuava marcado como inadimplente pra sempre**. E o card "Inadimplentes" do Financeiro (`qInadimplentes`) lê exatamente esse status do aluno — então esses pais continuavam aparecendo lá, e é bem provável que alguém tenha clicado "Enviar Cobrança" pra eles de novo achando que ainda deviam.
+
+**Encontrei 10 cobranças** nessa situação (`status=pago` mas `pago_em/metodo` nulos): Thomas Sant Ana Oliveira, Antonio Barcellos, Davi dos Santos Silva, João Miguel Silva Oliveira, Caetano Peixoto Avila, João Pedro Monteiro, Miguel Antônio de Oliveira Peruce, Nicolas Moura Rosa, Henrique Ornellas, Davi Neves — sendo que **6 desses alunos ainda estavam com status "inadimplente"** mesmo já pagos.
+
+**Fix no código:** `frontend/src/App.jsx` (`FichaCobranca.salvar`) — quando o status muda pra "pago" (e não estava pago antes), agora faz a mesma coisa que o webhook: grava `pago_em`/`metodo:"manual"`, cancela mensagens de inadimplência ainda `na_fila`, e volta o aluno pra "ativo".
+
+**Backfill dos dados já afetados:** corrigi as 10 cobranças e reativei os 6 alunos que estavam presos em "inadimplente" indevidamente.
+
+**Segundo bug achado no caminho — mensalidade R$0:** dois alunos (Bernardo S Duarte e Arthur Pena) tinham matrícula com `valor_mensalidade = 0` mesmo não sendo bolsistas — a cobrança gerada saiu "R$ 0,00 vencido" e ficava disparando lembrete de atraso por uma dívida que não existia de verdade. Causa: no formulário "Editar dados do aluno", escolher um Plano não preenchia sozinho o campo "Valor da mensalidade" — se quem estava cadastrando esquecesse de digitar o valor, salvava com R$0. Corrigi os dois registros (ajustei pra R$160, o valor real do plano "Jogador Caro") e **também corrigi o formulário**: agora escolher um Plano preenche automaticamente o valor (ainda dá pra editar manualmente depois, pra planos com desconto tipo "Irmãos"), e um aviso de confirmação aparece se tentar salvar valor R$0 sem marcar bolsista.
+
+**Conferido e OK (não precisou mexer):**
+- Os cards "Recebido"/"A receber" do Financeiro e "Previsto no mês"/"Em atraso" do Painel usam o status da *cobrança* (não do aluno), então já estavam corretos nesse sentido — só distorcidos pelos R$0 acima.
+- "Enzo de S M Baldez Machado" parecia suspeito no primeiro filtro (tem cobrança paga E inadimplente) mas na verdade são duas cobranças diferentes — a taxa de matrícula já paga, e a mensalidade de setembro seguinte genuinely em aberto. Sem bug aí.
+- Não achei "Patricia Rosana Moura" no sistema — o parentesco mais próximo (família Moura/Raphael da Rosa Moura/Benjamin) já está com pagamento certinho, sem pendência. Pode ser a mãe do Benjamin (não cadastrada por nome) reclamando de uma sobreposição de horário legítima (pagou tarde da noite/de manhã, a régua roda 9h e pode ter rodado antes do pagamento cair no sistema) — não achei bug adicional aí; avisar se for outra família.
+
+**Limitação que continua existindo (fora do escopo dessa correção):** o webhook da InfinitePay ainda não é 100% confiável — o fix de hoje impede que uma correção manual "esqueça" de liberar o aluno, mas não resolve o problema de fundo (webhook não avisar automaticamente). Enquanto isso não muda, vale continuar conferindo de vez em quando cobranças "vencido" antigas contra a InfinitePay.
+
+## Correção: teclado do celular fechava a cada letra digitada em Anotações (2026-09-09)
+
+- Bug relatado com vídeo: no campo "Anotações" da Ficha do aluno, o teclado do celular recolhia sozinho a cada caractere digitado.
+- Causa: `CardAcao` (o componente que desenha cada cartão da Ficha — Dados, Anamnese, Contrato, Comunicação, Anotações, Financeiro) estava definido **dentro** da função do componente `Ficha`, não no nível do módulo. Isso faz o React recriar essa função a cada re-render — e como digitar no campo Anotações atualiza um `useState` local (`notas`), toda letra digitada re-renderizava `Ficha`, recriava `CardAcao` do zero, e o React desmontava/remontava **todos** os cartões (achando que era um componente diferente) — inclusive o `<textarea>` com o foco. Perder o elemento focado é o que faz o teclado do celular fechar sozinho no Android/iOS.
+- Fix: movi `CardAcao` pra fora de `Ficha`, como componente de módulo (mesmo nível de `Card`, `Botao` etc.) — assim ele mantém a mesma identidade entre renders e o React só atualiza o conteúdo, sem desmontar nada.
+- Verificação: assisti ao vídeo enviado (extraindo quadros com um servidor local + `<video>`/canvas, sem precisar de ffmpeg) e confirmei visualmente o padrão exato — teclado fecha a cada tecla, com a tela rolando junto (efeito colateral da remontagem).
+
 ## Correção: recorte de foto "desregulava" no zoom + edição completa da matrícula (2026-09-08)
 
 - **Bug do zoom no recorte de foto (`frontend/src/SeletorFoto.jsx`):** a causa real não era a lógica de zoom em si, era o CSS global do Tailwind (`img { max-width: 100%; height: auto }`) sobrepondo o tamanho que o componente calculava — a imagem nunca crescia de verdade além do tamanho do círculo, então o zoom não tinha efeito visual real e a posição ficava toda desalinhada. Corrigido com `maxWidth: "none", maxHeight: "none"` explícito no estilo da imagem. Testei programaticamente (injetando uma imagem via JS no formulário público local): antes o elemento ficava travado em 260×260px não importa o zoom; depois passou a dobrar de tamanho corretamente (520×260 → 1040×520 ao ir de zoom 1x pra 2x).
@@ -366,7 +436,21 @@ Reescritas com tom mais caloroso (baseado no doc "App futebol 2026.docx" que a P
 - O formulário público de aula experimental (`Experimental.jsx`) ganhou o campo **"Dia e horário que pretende ir"** (`data_aula`, datetime-local) — antes só dava pra editar isso depois, pelo painel. Backend (`publico.js`) aceita e grava o campo.
 - Tela **Conversas**: novo botão **"Enviar Convite Aula Experimental"** no cabeçalho da conversa (`ThreadConversa`), disponível pra qualquer contato (cadastrado ou não). Cria um convite tipo `experimental` (token público, sem vincular a nenhum registro) via `POST /api/convites` e enfileira a mensagem manualmente com o link, reaproveitando o telefone já conhecido da conversa.
 
+## Aviso de aniversário no grupo interno da equipe (2026-09-21)
+
+Além da mensagem de parabéns pro responsável, o cron diário de aniversário (`backend/src/aniversarios.js`, roda 8h América/São Paulo) agora também avisa um **grupo interno do WhatsApp** (só equipe, aluno não participa), com a foto do aluno colada numa arte de aniversário.
+
+- **Grupo**: "Aniversário dos alunos Leões🦁🎈🥳", JID `120363428162669196@g.us` (nosso número já é admin do grupo — não precisou entrar, só descobrir o JID). Guardado em `UAZAPI_GRUPO_ANIVERSARIO_JID` (local e produção).
+- **Como descobrir o JID de um grupo pelo link de convite**: `POST {UAZAPI_URL}/group/inviteInfo` com `{invitecode: "<link ou código>"}` e header `token` — retorna o objeto do grupo com `JID`, sem precisar entrar nele. Pra enviar mensagem pro grupo, usa esse JID direto como `number` em `/send/text` ou `/send/media`.
+- **Composição da imagem** (`backend/src/aniversarioImagem.js`, usa `sharp`): recorta a foto do aluno em círculo e cola por cima do template `backend/templates/aniversario-template.jpg` (arte fornecida pela Priscila). Coordenadas do círculo: centro `(744, 837)`, raio `262`. **Atenção**: a primeira estimativa (feita "no olho" com grid visual) deu `(792, 787)` raio `188` — parecia certa numa checagem visual rápida, mas deixava um gap visível (principalmente embaixo) quando testado de verdade. Corrigido varrendo os pixels do template programaticamente (`medir-circulo.mjs`, descartável — não faz parte do projeto) pra achar onde o anel dourado realmente começa em 4 direções e resolver o centro/raio reais por geometria. Se essa arte for trocada no futuro, repetir esse processo de medição por pixel em vez de estimar visualmente. Sem foto cadastrada, manda só o texto.
+- Imagem gerada sobe pro bucket público `eventos` (reaproveitado, não criei bucket novo), path `aniversarios/{aluno_id}-{timestamp}.jpg`.
+- **Pegadinha de deploy**: `docker service update --force` NÃO relê o `.env` (o `env_file` do `stack.yml` só é recarregado por `docker stack deploy`). Se adicionar/mudar variável de ambiente, o deploy tem que ser `docker stack deploy -c stack.yml leoezinhos --resolve-image never` (rodado de dentro de `~/leoezinhos/backend` na VPS) — só assim a variável nova chega no container.
+- Testado com envio real pro grupo (foto do Bernardo S Duarte, já que o aniversariante do dia — João Miguel Silva Oliveira — ainda não tem foto cadastrada).
+- **Tratamento da foto (2026-09-21, a pedido da Priscila)**: a foto agora é aproximada e o fundo desfocado nas bordas, pra parecer mais com um retrato (referência: uma versão que a Priscila fez no ChatGPT pra comparação). **Não usamos detecção de rosto de verdade** (evita depender de libs nativas pesadas tipo `canvas`/TensorFlow no build Alpine do Docker) — em vez disso: `sharp.strategy.attention` escolhe a região mais "detalhada" da foto (geralmente o rosto) ao cortar pro quadrado, aplicamos um zoom extra de `1.55x` sobre isso, e desfocamos as bordas com um gradiente radial (nítido no centro, borrado a partir de ~45% do raio). Testado em 4 fotos diferentes — funciona bem na maioria, mas por não ser detecção de rosto de verdade, alguma foto ocasional pode cortar um pouco de mais/menos (testado: zoom 1.8x cortava o queixo em fotos com o rosto mais baixo no enquadramento; 1.55x ficou equilibrado). Se no futuro aparecerem fotos com resultado ruim, considerar face detection de verdade (custo: mudança maior no Dockerfile ou API paga de terceiro).
+
 ## Pendências de informação
+
+- **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.
 
 - **"Arthur" duplicado?** O sistema tem um "Arthur" (responsável Lorena, já inativo). A nova lista da Priscila traz outro "Arthur" pagante (responsável **Janine Cabral**, tel. (21) 97987-1251) — telefone e responsável diferentes. Pode ser o mesmo aluno com o responsável errado no cadastro, ou um aluno diferente. **Não cadastrado ainda — aguardando a Priscila confirmar.**
 - **"Bernardo S. Duarte" duplicado?** "Bernardo Souto Ferreira Chagas" (mãe Maira Chagas) já está cadastrado. A nova lista também traz "Bernardo S. Duarte" com responsável **José Mario Bernardo S Duarte** e telefone diferente — pode ser o pai do mesmo menino ou um Bernardo diferente. **Não cadastrado ainda — aguardando confirmação.**

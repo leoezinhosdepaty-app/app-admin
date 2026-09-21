@@ -128,7 +128,7 @@ const qExperimentais = () => supabase
 
 const qCobrancas = () => supabase
   .from("cobrancas")
-  .select("*, alunos ( nome ), locais ( nome )")
+  .select("*, alunos ( nome, responsaveis ( nome, telefone ) ), locais ( nome )")
   .order("vencimento", { ascending: false })
   .limit(200);
 
@@ -188,16 +188,25 @@ async function enviarLinkConvite(tipo, telefone, nomeConversa) {
 }
 
 /* ---------------------------- utilidades ---------------------------- */
+// "YYYY-MM-DD" é só uma data, sem hora — nunca passa por new Date() aqui, porque
+// isso vira meia-noite UTC e desloca um dia pra trás em fusos negativos (Brasil).
 const idade = (nasc) => {
   if (!nasc) return null;
-  const d = new Date(nasc), h = new Date();
-  let a = h.getFullYear() - d.getFullYear();
-  const m = h.getMonth() - d.getMonth();
-  if (m < 0 || (m === 0 && h.getDate() < d.getDate())) a--;
+  const [ano, mes, dia] = nasc.slice(0, 10).split("-").map(Number);
+  const hoje = new Date();
+  let a = hoje.getFullYear() - ano;
+  const m = (hoje.getMonth() + 1) - mes;
+  if (m < 0 || (m === 0 && hoje.getDate() < dia)) a--;
   return a;
 };
 const brl = (v) => `R$ ${Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
-const dataBr = (d) => d ? new Date(d).toLocaleDateString("pt-BR") : "—";
+const dataBr = (d) => {
+  if (!d) return "—";
+  // "YYYY-MM-DD" puro (sem hora) é só uma data — reformata direto, sem passar por
+  // new Date()/toLocaleDateString(), senão vira meia-noite UTC e mostra um dia a menos
+  // pra quem está num fuso negativo (Brasil). Datas com hora (timestamps) seguem normal.
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split("-").reverse().join("/") : new Date(d).toLocaleDateString("pt-BR");
+};
 const turmaTxt = (t) => t ? `${t.locais?.nome} · ${t.dias} · ${String(t.horario).slice(0, 5)}` : "Sem turma";
 
 const pendenciasDe = (a) => {
@@ -338,12 +347,14 @@ function Painel({ ir }) {
   const lista = alunos.dados ?? [];
   const cobs = cobrancas.dados ?? [];
   const hoje = new Date();
-  const aniversariantes = lista.filter((a) => a.nascimento &&
-    new Date(a.nascimento).getMonth() === hoje.getMonth() &&
-    new Date(a.nascimento).getDate() === hoje.getDate());
+  const aniversariantes = lista.filter((a) => {
+    if (!a.nascimento) return false;
+    const [, mes, dia] = a.nascimento.slice(0, 10).split("-").map(Number);
+    return mes === hoje.getMonth() + 1 && dia === hoje.getDate();
+  });
   const emAtraso = cobs.filter((c) => c.status === "vencido" ||
     (c.status === "aberto" && new Date(c.vencimento) < hoje));
-  const previsto = lista.reduce((s, a) =>
+  const previsto = lista.filter((a) => a.status === "ativo").reduce((s, a) =>
     s + Number(a.matriculas?.find((m) => m.ativa)?.valor_mensalidade ?? 0), 0);
   const comPendencia = lista.filter((a) => a.status !== "inativo" && pendenciasDe(a).length);
 
@@ -581,6 +592,13 @@ function ChecklistMatricula({ a, mat }) {
   );
 }
 
+const CardAcao = ({ titulo, children }) => (
+  <div className="rounded-2xl border p-4" style={{ borderColor: "#E6E9F2" }}>
+    <p className="mb-2 text-sm font-bold" style={{ color: NAVY }}>{titulo}</p>
+    {children}
+  </div>
+);
+
 function Ficha({ a, fechar, recarregar }) {
   const { role } = usePerfil();
   const mat = a.matriculas?.find((m) => m.ativa);
@@ -695,13 +713,6 @@ function Ficha({ a, fechar, recarregar }) {
   const contrato = a.documentos?.find((d) => d.tipo === "contrato");
   const cobrancasRecentes = [...(a.cobrancas ?? [])]
     .sort((x, y) => new Date(y.vencimento ?? 0) - new Date(x.vencimento ?? 0)).slice(0, 5);
-
-  const CardAcao = ({ titulo, children }) => (
-    <div className="rounded-2xl border p-4" style={{ borderColor: "#E6E9F2" }}>
-      <p className="mb-2 text-sm font-bold" style={{ color: NAVY }}>{titulo}</p>
-      {children}
-    </div>
-  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6"
@@ -917,6 +928,12 @@ function Ficha({ a, fechar, recarregar }) {
             {
               chave: "plano_id", label: "Plano", tipo: "select", padrao: mat?.plano_id ?? "",
               opcoes: (planos ?? []).map((p) => ({ value: p.id, label: `${p.nome} — ${brl(p.valor)} (${p.frequencia_semanal}x/semana)` })),
+              // preenche o valor da mensalidade sozinho ao trocar o plano — sem isso é fácil
+              // esquecer de atualizar o valor e a cobrança sair com R$0 (já aconteceu de verdade)
+              aoMudar: (planoId, novosValores) => {
+                const plano = (planos ?? []).find((p) => p.id === planoId);
+                return plano ? { ...novosValores, valor_mensalidade: String(plano.valor) } : novosValores;
+              },
             },
             { chave: "valor_mensalidade", label: "Valor da mensalidade (R$)", tipo: "number", padrao: String(mat?.valor_mensalidade ?? "0") },
             { chave: "dia_vencimento", label: "Dia do vencimento", tipo: "number", padrao: String(mat?.dia_vencimento ?? "15") },
@@ -931,9 +948,17 @@ function Ficha({ a, fechar, recarregar }) {
               tamanho_uniforme: v.tamanho_uniforme || null, turma_id: v.turma_id || null, bolsista: v.bolsista,
             }).eq("id", a.id);
             if (e1) throw e1;
+            const valorMensalidade = v.valor_mensalidade ? Number(v.valor_mensalidade) : 0;
+            if (!v.bolsista && valorMensalidade === 0) {
+              const seguir = window.confirm(
+                "O valor da mensalidade está R$ 0,00 e o aluno não está marcado como bolsista. " +
+                "Isso vai gerar cobranças de R$ 0. Salvar assim mesmo?"
+              );
+              if (!seguir) throw new Error("Ajuste o valor da mensalidade ou marque como bolsista antes de salvar.");
+            }
             const dadosMatricula = {
               plano_id: v.plano_id || null,
-              valor_mensalidade: v.valor_mensalidade ? Number(v.valor_mensalidade) : 0,
+              valor_mensalidade: valorMensalidade,
               dia_vencimento: Number(v.dia_vencimento) || 15,
             };
             const { error: e3 } = mat
@@ -1071,11 +1096,24 @@ function FichaCobranca({ c, fechar, recarregar }) {
   const salvar = async () => {
     setSalvando(true);
     setErro(null);
+    const acabouDePagar = status === "pago" && c.status !== "pago";
     const { error } = await supabase.from("cobrancas").update({
       descricao, valor: Number(valor), vencimento, status,
+      ...(acabouDePagar ? { pago_em: new Date().toISOString().slice(0, 10), metodo: "manual" } : {}),
     }).eq("id", c.id);
+    if (error) { setSalvando(false); setErro(error.message); return; }
+
+    if (acabouDePagar) {
+      // mesma coisa que o webhook da InfinitePay faria: cancela lembrete de atraso
+      // ainda na fila e reativa o aluno, senão ele continua marcado inadimplente
+      // pra sempre mesmo já tendo pago (foi exatamente isso que gerou reclamação).
+      await supabase.from("mensagens").update({ status: "cancelada" })
+        .eq("aluno_id", c.aluno_id).eq("status", "na_fila").like("tipo", "inadimplencia%");
+      await supabase.from("alunos").update({ status: "ativo" })
+        .eq("id", c.aluno_id).eq("status", "inadimplente");
+    }
+
     setSalvando(false);
-    if (error) { setErro(error.message); return; }
     recarregar();
     fechar();
   };
@@ -1096,7 +1134,12 @@ function FichaCobranca({ c, fechar, recarregar }) {
       <div onClick={(e) => e.stopPropagation()}
         className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-5 sm:rounded-3xl">
         <div className="mb-4 flex items-start justify-between">
-          <h3 className="text-lg font-bold" style={{ color: NAVY }}>{c.alunos?.nome}</h3>
+          <div>
+            <h3 className="text-lg font-bold" style={{ color: NAVY }}>{c.alunos?.nome}</h3>
+            <p className="text-xs" style={{ color: "#5C678A" }}>
+              Responsável: {c.alunos?.responsaveis?.nome ?? "—"}{c.alunos?.responsaveis?.telefone ? ` · ${c.alunos.responsaveis.telefone}` : ""}
+            </p>
+          </div>
           <button onClick={fechar} aria-label="Fechar"><X size={20} style={{ color: NAVY }} /></button>
         </div>
 
@@ -1170,6 +1213,9 @@ function CardInadimplente({ a }) {
     <li className="flex items-center justify-between gap-3 rounded-xl p-2" style={{ background: SAND }}>
       <div className="min-w-0">
         <p className="truncate font-semibold" style={{ color: NAVY }}>{a.nome}</p>
+        <p className="truncate text-xs" style={{ color: "#5C678A" }}>
+          Responsável: {a.responsaveis?.nome ?? "—"}{a.responsaveis?.telefone ? ` · ${a.responsaveis.telefone}` : ""}
+        </p>
         <p className="truncate text-xs" style={{ color: "#5C678A" }}>
           {cobrancaAberta ? `${cobrancaAberta.descricao} · venceu ${dataBr(cobrancaAberta.vencimento)}` : "sem cobrança em aberto"}
         </p>
@@ -1256,6 +1302,9 @@ function Financeiro() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-semibold" style={{ color: NAVY }}>{c.alunos?.nome}</p>
+                  <p className="text-xs" style={{ color: "#5C678A" }}>
+                    Responsável: {c.alunos?.responsaveis?.nome ?? "—"}{c.alunos?.responsaveis?.telefone ? ` · ${c.alunos.responsaveis.telefone}` : ""}
+                  </p>
                   <p className="text-xs" style={{ color: "#5C678A" }}>{c.descricao} · vence {dataBr(c.vencimento)} · {c.locais?.nome}</p>
                 </div>
                 <div className="text-right">
@@ -1661,7 +1710,10 @@ function ModalForm({ titulo, campos, aoSalvar, fechar }) {
   const [valores, setValores] = useState(() => Object.fromEntries(campos.map((c) => [c.chave, c.padrao ?? (c.tipo === "checkbox" ? false : "")])));
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState(null);
-  const set = (chave) => (e) => setValores((v) => ({ ...v, [chave]: e.target.value }));
+  const set = (c) => (e) => setValores((v) => {
+    const novos = { ...v, [c.chave]: e.target.value };
+    return c.aoMudar ? c.aoMudar(e.target.value, novos) : novos;
+  });
   const setChecked = (chave) => (e) => setValores((v) => ({ ...v, [chave]: e.target.checked }));
 
   const salvar = async (e) => {
@@ -1700,17 +1752,17 @@ function ModalForm({ titulo, campos, aoSalvar, fechar }) {
                 {c.label}{c.obrigatorio && " *"}
               </span>
               {c.tipo === "select" ? (
-                <select required={c.obrigatorio} value={valores[c.chave]} onChange={set(c.chave)}
+                <select required={c.obrigatorio} value={valores[c.chave]} onChange={set(c)}
                   className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2" }}>
                   <option value="">Selecione</option>
                   {c.opcoes.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               ) : c.tipo === "textarea" ? (
-                <textarea value={valores[c.chave]} onChange={set(c.chave)} required={c.obrigatorio}
+                <textarea value={valores[c.chave]} onChange={set(c)} required={c.obrigatorio}
                   className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2" }} />
               ) : (
                 <input required={c.obrigatorio} type={c.tipo ?? "text"} step={c.tipo === "number" ? "0.01" : undefined}
-                  value={valores[c.chave]} onChange={set(c.chave)}
+                  value={valores[c.chave]} onChange={set(c)}
                   className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2" }} />
               )}
             </label>
