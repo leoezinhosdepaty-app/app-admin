@@ -448,6 +448,16 @@ Além da mensagem de parabéns pro responsável, o cron diário de aniversário 
 - Testado com envio real pro grupo (foto do Bernardo S Duarte, já que o aniversariante do dia — João Miguel Silva Oliveira — ainda não tem foto cadastrada).
 - **Tratamento da foto (2026-09-21, a pedido da Priscila)**: a foto agora é aproximada e o fundo desfocado nas bordas, pra parecer mais com um retrato (referência: uma versão que a Priscila fez no ChatGPT pra comparação). **Não usamos detecção de rosto de verdade** (evita depender de libs nativas pesadas tipo `canvas`/TensorFlow no build Alpine do Docker) — em vez disso: `sharp.strategy.attention` escolhe a região mais "detalhada" da foto (geralmente o rosto) ao cortar pro quadrado, aplicamos um zoom extra de `1.55x` sobre isso, e desfocamos as bordas com um gradiente radial (nítido no centro, borrado a partir de ~45% do raio). Testado em 4 fotos diferentes — funciona bem na maioria, mas por não ser detecção de rosto de verdade, alguma foto ocasional pode cortar um pouco de mais/menos (testado: zoom 1.8x cortava o queixo em fotos com o rosto mais baixo no enquadramento; 1.55x ficou equilibrado). Se no futuro aparecerem fotos com resultado ruim, considerar face detection de verdade (custo: mudança maior no Dockerfile ou API paga de terceiro).
 
+## Relatório de repasse mensal (2026-09-29, a pedido da Priscila)
+
+Todo mês a Priscila manda pra escola (INSA/MPAC) a lista de quem pagou, pra calcular o repasse de 30% — hoje fazia isso numa planilha manual. Agora tem um botão em **Financeiro → "Relatório de repasse"** que gera um PDF (abre numa aba nova, pronta pra imprimir/salvar).
+
+- **Backend**: `backend/src/relatorios.js`, rota `GET /api/relatorios/repasse?unidade=INSA&mes=8&ano=2026` (autenticada). Filtra `cobrancas` com `status='pago'` e `local_id` da unidade, usando o **mês do `vencimento`** como mês de referência — não a data em que foi paga (`pago_em`), porque uma mensalidade de agosto paga em setembro (atraso/reconciliação manual) continua sendo "de agosto" pro repasse. Isso é o mesmo padrão já usado no `gerarCobrancasDoMes` (o `vencimento` é gerado dentro do mês de referência).
+- PDF gerado com `pdfkit` (já era dependência, usada no contrato) — não sobe pro Storage, é gerado na hora e devolvido direto na resposta (`Content-Type: application/pdf`), não precisa de bucket nem link assinado.
+- Agrupa por turma (dias+horário) com subtotal de cada uma, total geral e o cálculo do repasse (30%, fixo por enquanto — se algum dia o percentual variar por unidade, dá pra virar configurável).
+- **Frontend**: `abrirPdfAutenticado()` (App.jsx) faz o fetch com o token de auth (rota não é pública) e abre o PDF numa aba nova via blob — diferente do `apiPost`/`apiGet` que esperam JSON.
+- Testado com dados reais (INSA, agosto/2026) antes de publicar — 8 cobranças, 2 turmas, total e repasse batendo.
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.

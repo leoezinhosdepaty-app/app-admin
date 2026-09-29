@@ -9,6 +9,7 @@ import { router as publicoRouter } from "./publico.js";
 import { router as webhookUazapiRouter } from "./webhookUazapi.js";
 import { router as eventosRouter } from "./eventos.js";
 import { router as professoresRouter } from "./professores.js";
+import { router as relatoriosRouter } from "./relatorios.js";
 import { processarFila } from "./worker.js";
 import { mensagensAniversarioAlunos } from "./aniversarios.js";
 
@@ -21,6 +22,7 @@ app.use(publicoRouter);
 app.use(webhookUazapiRouter);
 app.use(eventosRouter);
 app.use(professoresRouter);
+app.use(relatoriosRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

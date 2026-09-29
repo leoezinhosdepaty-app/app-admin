@@ -31,6 +31,22 @@ async function apiAuth(metodo, path, body) {
 const apiPost = (path, body) => apiAuth("POST", path, body);
 const apiGet = (path) => apiAuth("GET", path);
 
+/* Baixa um PDF de um endpoint autenticado e abre numa aba nova (o navegador
+   já oferece "Imprimir"/"Salvar como PDF" ali) — diferente de apiAuth porque
+   a resposta é o arquivo binário, não JSON. */
+async function abrirPdfAutenticado(path) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.error || `Erro ${res.status}`);
+  }
+  const blob = await res.blob();
+  window.open(URL.createObjectURL(blob), "_blank");
+}
+
 /* ---------- identidade visual (ajustar quando a logo chegar) ---------- */
 const NAVY = "#122A5C";
 const LIME = "#F0B429";
@@ -1228,6 +1244,73 @@ function CardInadimplente({ a }) {
   );
 }
 
+const MESES_NOME = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+  "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+function RelatorioRepasseModal({ fechar }) {
+  const hoje = new Date();
+  // por padrão sugere o mês passado — normalmente o repasse de um mês só fecha depois que ele termina
+  const mesPassado = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+  const [unidade, setUnidade] = useState("INSA");
+  const [mes, setMes] = useState(String(mesPassado.getMonth() + 1));
+  const [ano, setAno] = useState(String(mesPassado.getFullYear()));
+  const [gerando, setGerando] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  const gerar = async () => {
+    setGerando(true);
+    setErro(null);
+    try {
+      await abrirPdfAutenticado(`/api/relatorios/repasse?unidade=${unidade}&mes=${mes}&ano=${ano}`);
+    } catch (e) {
+      setErro(e.message);
+    } finally {
+      setGerando(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(14,31,73,.45)" }} onClick={(e) => { e.stopPropagation(); fechar(); }}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-3xl bg-white p-5">
+        <h3 className="mb-1 text-lg font-bold" style={{ color: NAVY }}>Relatório de repasse</h3>
+        <p className="mb-3 text-xs" style={{ color: "#5C678A" }}>
+          Lista quem pagou a mensalidade no mês escolhido, com o total arrecadado e o repasse de 30% pra unidade. Abre em PDF, pra imprimir ou salvar.
+        </p>
+        <div className="space-y-2">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold" style={{ color: "#5C678A" }}>Unidade</span>
+            <select value={unidade} onChange={(e) => setUnidade(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2" }}>
+              {UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </label>
+          <div className="flex gap-2">
+            <label className="block flex-1">
+              <span className="mb-1 block text-xs font-semibold" style={{ color: "#5C678A" }}>Mês</span>
+              <select value={mes} onChange={(e) => setMes(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2" }}>
+                {MESES_NOME.map((nome, i) => <option key={i} value={i + 1}>{nome}</option>)}
+              </select>
+            </label>
+            <label className="block w-24">
+              <span className="mb-1 block text-xs font-semibold" style={{ color: "#5C678A" }}>Ano</span>
+              <input type="number" value={ano} onChange={(e) => setAno(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2" }} />
+            </label>
+          </div>
+          {erro && <p className="text-xs font-semibold" style={{ color: CLAY }}>{erro}</p>}
+          <div className="flex gap-2 pt-2">
+            <Botao tom="navy" icon={FileText} onClick={gerar} disabled={gerando}>
+              {gerando ? "Gerando…" : "Gerar PDF"}
+            </Botao>
+            <Botao tom="ghost" onClick={fechar}>Fechar</Botao>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Financeiro() {
   const { role } = usePerfil();
   const { dados, erro, carregando, recarregar } = useQuery("cob", qCobrancas);
@@ -1237,6 +1320,7 @@ function Financeiro() {
   const [venceDe, setVenceDe] = useState("");
   const [venceAte, setVenceAte] = useState("");
   const [aberta, setAberta] = useState(null);
+  const [relatorioAberto, setRelatorioAberto] = useState(false);
 
   const lista = (dados ?? []).filter((c) =>
     (conta === "Todas" || c.locais?.nome === conta) &&
@@ -1249,7 +1333,9 @@ function Financeiro() {
 
   return (
     <div>
-      <Titulo>Financeiro</Titulo>
+      <Titulo acao={role !== "professor" && (
+        <Botao icon={FileText} onClick={() => setRelatorioAberto(true)}>Relatório de repasse</Botao>
+      )}>Financeiro</Titulo>
       <div className="mb-2 flex flex-wrap gap-2">
         {["Todas", ...UNIDADES].map((c) => (
           <button key={c} onClick={() => setConta(c)} className="rounded-xl px-3 py-2 text-sm font-semibold"
@@ -1318,6 +1404,7 @@ function Financeiro() {
       </Estado>
 
       {aberta && <FichaCobranca c={aberta} fechar={() => setAberta(null)} recarregar={recarregar} />}
+      {relatorioAberto && <RelatorioRepasseModal fechar={() => setRelatorioAberto(false)} />}
     </div>
   );
 }
