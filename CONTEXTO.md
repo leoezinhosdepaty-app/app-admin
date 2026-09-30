@@ -458,6 +458,14 @@ Todo mês a Priscila manda pra escola (INSA/MPAC) a lista de quem pagou, pra cal
 - **Frontend**: `abrirPdfAutenticado()` (App.jsx) faz o fetch com o token de auth (rota não é pública) e abre o PDF numa aba nova via blob — diferente do `apiPost`/`apiGet` que esperam JSON.
 - Testado com dados reais (INSA, agosto/2026) antes de publicar — 8 cobranças, 2 turmas, total e repasse batendo.
 
+## Observação em Conversas/Oportunidades + Fila de mensagens + aviso de remarcação (2026-09-29)
+
+- **Campo `observacao`** (texto livre) adicionado na tabela `conversas` — editável tanto na tela **Conversas** (dentro da conversa aberta) quanto na listagem de **Oportunidades** (direto no card, sem precisar abrir a conversa). Salva sozinho ao sair do campo (`onBlur`), sem botão de salvar.
+- **Nova tela "Fila de mensagens"** (`Fila()` em App.jsx, consulta `mensagens` com `status='na_fila'`): lista tudo que está agendado pra sair no WhatsApp (cobrança, convite, lembrete, aniversário) com botão **Cancelar** por mensagem. Cancelar só funciona enquanto ainda está `na_fila` (`.eq("status","na_fila")` na própria query de update — evita cancelar algo que o worker já pegou pra enviar).
+- **Aviso automático de remarcação de aula experimental**: em Experimental, ao editar a data de uma aula (`CardExperimental`) e salvar, se a data realmente mudou, dispara uma mensagem pro responsável confirmando o novo horário (`tipo: "reagendamento_experimental"`). Só dispara se a data mudou de verdade (evita mensagem à toa ao só reabrir/fechar o editor) e só se uma data válida foi definida (limpar a data não manda nada).
+- Tudo isso é direto Supabase (sem endpoint novo no backend) — só o `apiAuth`/`abrirPdfAutenticado` do relatório de repasse usa o backend.
+- Testado com dados isolados/fictícios antes de publicar (não dá pra testar clicando de verdade sem logar como usuário real, e alguns fluxos aqui geram mensagem de WhatsApp de verdade pra família — evitado de propósito).
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.

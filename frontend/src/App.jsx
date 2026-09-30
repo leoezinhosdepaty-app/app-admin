@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   LayoutDashboard, Users, ClipboardList, Wallet, Award, CalendarDays,
   MessageSquare, Search, ArrowRight, AlertCircle, X, Plus, RefreshCw, LogOut,
-  FileText, Power, Pencil, Eye, EyeOff, Trash2, KeyRound, Star, Send
+  FileText, Power, Pencil, Eye, EyeOff, Trash2, KeyRound, Star, Send, Clock
 } from "lucide-react";
 import SeletorFoto from "./SeletorFoto.jsx";
 
@@ -175,6 +175,9 @@ const qResponsaveisPorTelefone = () => supabase
 const qThread = (telefone) => supabase
   .from("mensagens").select("*").eq("telefone", telefone).order("criado_em", { ascending: true }).limit(200);
 
+const qFila = () => supabase
+  .from("mensagens").select("*").eq("status", "na_fila").order("agendada_para", { ascending: true }).limit(300);
+
 const qExperimentaisSemana = () => {
   const hoje = new Date();
   const emUmaSemana = new Date(hoje.getTime() + 7 * 86400000);
@@ -224,6 +227,19 @@ const dataBr = (d) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split("-").reverse().join("/") : new Date(d).toLocaleDateString("pt-BR");
 };
 const turmaTxt = (t) => t ? `${t.locais?.nome} · ${t.dias} · ${String(t.horario).slice(0, 5)}` : "Sem turma";
+
+const TIPO_MENSAGEM_LABEL = {
+  manual: "Mensagem manual",
+  cobranca_mensalidade: "Cobrança mensal",
+  aniversario: "Feliz aniversário (responsável)",
+  aniversario_grupo: "Aviso de aniversário (grupo interno)",
+};
+const tipoMensagemTxt = (tipo) => {
+  if (TIPO_MENSAGEM_LABEL[tipo]) return TIPO_MENSAGEM_LABEL[tipo];
+  if (tipo?.startsWith("convite_")) return `Convite: ${tipo.replace("convite_", "")}`;
+  if (tipo?.startsWith("inadimplencia_d")) return `Lembrete de atraso (dia ${tipo.replace("inadimplencia_d", "")})`;
+  return tipo ?? "—";
+};
 
 const pendenciasDe = (a) => {
   const p = [];
@@ -1000,11 +1016,30 @@ function CardExperimental({ e, recarregar }) {
   const [editando, setEditando] = useState(false);
   const [data, setData] = useState(e.data_aula ? e.data_aula.slice(0, 16) : "");
   const [convertendo, setConvertendo] = useState(false);
+  const [salvandoData, setSalvandoData] = useState(false);
   const [aviso, setAviso] = useState(null);
 
   const salvarData = async () => {
+    const dataAnterior = e.data_aula ? e.data_aula.slice(0, 16) : "";
+    const mudou = data !== dataAnterior;
+    setSalvandoData(true);
     const { error } = await supabase.from("experimentais").update({ data_aula: data || null }).eq("id", e.id);
-    if (!error) { setEditando(false); recarregar(); }
+    if (error) { setSalvandoData(false); return; }
+
+    // avisa a família pelo WhatsApp só quando uma data nova de verdade foi marcada
+    if (mudou && data && e.telefone) {
+      const dataFormatada = new Date(data).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+      await supabase.from("mensagens").insert({
+        telefone: e.telefone, direcao: "saida", tipo: "reagendamento_experimental",
+        corpo: `Oi${e.responsavel_nome ? `, ${e.responsavel_nome}` : ""}! 🦁 A aula experimental do(a) ${e.aluno_nome} foi remarcada pra ${dataFormatada}` +
+          `${e.turmas ? ` (${turmaTxt(e.turmas)})` : ""}. Te esperamos lá!`,
+        status: "na_fila", agendada_para: new Date().toISOString(),
+      });
+      setAviso("Data salva e responsável avisado pelo WhatsApp.");
+    }
+    setSalvandoData(false);
+    setEditando(false);
+    recarregar();
   };
 
   const converter = async () => {
@@ -1031,8 +1066,10 @@ function CardExperimental({ e, recarregar }) {
             <div className="mt-1 flex items-center gap-2">
               <input type="datetime-local" value={data} onChange={(ev) => setData(ev.target.value)}
                 className="rounded-lg border px-2 py-1 text-xs" style={{ borderColor: "#E6E9F2" }} />
-              <button onClick={salvarData} className="text-xs font-bold" style={{ color: "#1F5B2C" }}>Salvar</button>
-              <button onClick={() => setEditando(false)} className="text-xs" style={{ color: "#5C678A" }}>Cancelar</button>
+              <button onClick={salvarData} disabled={salvandoData} className="text-xs font-bold disabled:opacity-50" style={{ color: "#1F5B2C" }}>
+                {salvandoData ? "Salvando…" : "Salvar"}
+              </button>
+              <button onClick={() => setEditando(false)} disabled={salvandoData} className="text-xs" style={{ color: "#5C678A" }}>Cancelar</button>
             </div>
           ) : (
             <p className="text-xs" style={{ color: "#5C678A" }}>
@@ -1866,7 +1903,7 @@ function ModalForm({ titulo, campos, aoSalvar, fechar }) {
   );
 }
 
-function ThreadConversa({ telefone, contato, nomeConversa, oportunidade, emAtendimentoHumano, recarregarLista }) {
+function ThreadConversa({ telefone, contato, nomeConversa, oportunidade, observacaoInicial, emAtendimentoHumano, recarregarLista }) {
   const { dados, carregando, recarregar } = useQuery("thread-" + telefone, () => qThread(telefone), [telefone]);
   const [texto, setTexto] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -1874,6 +1911,19 @@ function ThreadConversa({ telefone, contato, nomeConversa, oportunidade, emAtend
   const [marcandoOportunidade, setMarcandoOportunidade] = useState(false);
   const [retomando, setRetomando] = useState(false);
   const [aviso, setAviso] = useState(null);
+  const [observacao, setObservacao] = useState(observacaoInicial ?? "");
+  const [salvandoObs, setSalvandoObs] = useState(false);
+
+  // troca de conversa: descarta o que estava digitado e recarrega a observação daquele contato
+  useEffect(() => { setObservacao(observacaoInicial ?? ""); }, [telefone]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const salvarObservacao = async () => {
+    if (observacao === (observacaoInicial ?? "")) return;
+    setSalvandoObs(true);
+    const { error } = await supabase.from("conversas").update({ observacao: observacao.trim() || null }).eq("telefone", telefone);
+    setSalvandoObs(false);
+    if (!error) recarregarLista?.();
+  };
 
   const enviar = async () => {
     if (!texto.trim()) return;
@@ -1943,6 +1993,14 @@ function ThreadConversa({ telefone, contato, nomeConversa, oportunidade, emAtend
 
       {aviso && <p className="mb-2 text-xs font-semibold" style={{ color: NAVY }}>{aviso}</p>}
 
+      <div className="mb-3">
+        <span className="mb-1 block text-xs font-semibold" style={{ color: "#5C678A" }}>Observação</span>
+        <textarea value={observacao} onChange={(e) => setObservacao(e.target.value)} onBlur={salvarObservacao}
+          placeholder="Anotações internas sobre esse contato (não é enviado pro WhatsApp)…" rows={2}
+          className="w-full resize-none rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2", color: NAVY }} />
+        {salvandoObs && <span className="text-xs" style={{ color: "#7A85A3" }}>Salvando…</span>}
+      </div>
+
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
         {carregando && <p className="text-sm" style={{ color: "#5C678A" }}>Carregando…</p>}
         {(dados ?? []).map((m) => (
@@ -1969,9 +2027,13 @@ function ThreadConversa({ telefone, contato, nomeConversa, oportunidade, emAtend
   );
 }
 
-function CardOportunidade({ o, ir }) {
+function CardOportunidade({ o, ir, recarregar }) {
   const [enviandoTipo, setEnviandoTipo] = useState(null);
   const [aviso, setAviso] = useState(null);
+  const [observacao, setObservacao] = useState(o.observacao ?? "");
+  const [salvandoObs, setSalvandoObs] = useState(false);
+
+  useEffect(() => { setObservacao(o.observacao ?? ""); }, [o.observacao]);
 
   const disparar = async (e, tipo) => {
     e.stopPropagation();
@@ -1984,6 +2046,14 @@ function CardOportunidade({ o, ir }) {
     } finally {
       setEnviandoTipo(null);
     }
+  };
+
+  const salvarObservacao = async () => {
+    if (observacao === (o.observacao ?? "")) return;
+    setSalvandoObs(true);
+    const { error } = await supabase.from("conversas").update({ observacao: observacao.trim() || null }).eq("telefone", o.telefone);
+    setSalvandoObs(false);
+    if (!error) recarregar?.();
   };
 
   return (
@@ -2002,6 +2072,11 @@ function CardOportunidade({ o, ir }) {
           </Botao>
         </div>
       </div>
+      <textarea value={observacao} onClick={(e) => e.stopPropagation()}
+        onChange={(e) => setObservacao(e.target.value)} onBlur={salvarObservacao}
+        placeholder="Observação (anotação interna)…" rows={1}
+        className="mt-2 w-full resize-none rounded-lg border px-2 py-1 text-xs" style={{ borderColor: "#E6E9F2", color: NAVY }} />
+      {salvandoObs && <span className="text-xs" style={{ color: "#7A85A3" }}>Salvando…</span>}
       {aviso && <p className="mt-2 text-xs font-semibold" style={{ color: CLAY }}>{aviso}</p>}
     </Card>
   );
@@ -2018,7 +2093,7 @@ function Oportunidades({ ir }) {
       </p>
       <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(dados ?? []).length === 0}>
         <div className="space-y-2">
-          {(dados ?? []).map((o) => <CardOportunidade key={o.telefone} o={o} ir={ir} />)}
+          {(dados ?? []).map((o) => <CardOportunidade key={o.telefone} o={o} ir={ir} recarregar={recarregar} />)}
         </div>
       </Estado>
     </div>
@@ -2105,6 +2180,7 @@ function Conversas({ ir, telefoneAlvo }) {
                 contato={contatoDe(selecionado)}
                 nomeConversa={dados?.find((d) => d.telefone === selecionado)?.nome}
                 oportunidade={dados?.find((d) => d.telefone === selecionado)?.oportunidade}
+                observacaoInicial={dados?.find((d) => d.telefone === selecionado)?.observacao}
                 emAtendimentoHumano={dados?.find((d) => d.telefone === selecionado)?.em_atendimento_humano}
                 ir={ir} recarregarLista={recarregar}
               />
@@ -2114,6 +2190,63 @@ function Conversas({ ir, telefoneAlvo }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CardMensagemFila({ m, contato, recarregar }) {
+  const [cancelando, setCancelando] = useState(false);
+
+  const cancelar = async () => {
+    if (!window.confirm(`Cancelar este envio (${tipoMensagemTxt(m.tipo)}) pra ${contato ?? m.telefone}?`)) return;
+    setCancelando(true);
+    const { error } = await supabase.from("mensagens").update({ status: "cancelada" })
+      .eq("id", m.id).eq("status", "na_fila"); // só cancela se ainda não começou a enviar
+    setCancelando(false);
+    if (error) { alert(error.message); return; }
+    recarregar();
+  };
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-semibold" style={{ color: NAVY }}>{contato ?? m.telefone}</p>
+          <p className="text-xs" style={{ color: "#5C678A" }}>{tipoMensagemTxt(m.tipo)} · agendada pra {new Date(m.agendada_para).toLocaleString("pt-BR")}</p>
+          <p className="mt-1 truncate text-xs" style={{ color: "#5C678A" }}>{m.corpo}</p>
+        </div>
+        <Botao tom="ghost" icon={X} onClick={cancelar} disabled={cancelando}>
+          {cancelando ? "Cancelando…" : "Cancelar"}
+        </Botao>
+      </div>
+    </Card>
+  );
+}
+
+function Fila() {
+  const { dados, erro, carregando, recarregar } = useQuery("fila", qFila);
+  const { dados: responsaveis } = useQuery("resp-tel-fila", qResponsaveisPorTelefone);
+
+  const contatoDe = (telefone) => {
+    const r = responsaveis?.find((x) => x.telefone === telefone);
+    if (!r) return null;
+    const alunosNomes = r.alunos?.map((a) => a.nome).join(", ");
+    return `${r.nome}${alunosNomes ? ` · ${alunosNomes}` : ""}`;
+  };
+
+  return (
+    <div>
+      <Titulo acao={<Botao tom="ghost" icon={RefreshCw} onClick={recarregar}>Atualizar</Botao>}>Fila de mensagens</Titulo>
+      <p className="mb-4 text-sm" style={{ color: "#5C678A" }}>
+        Mensagens de WhatsApp agendadas pra sair (cobrança, convite, lembrete, aniversário). Cancele aqui antes de serem enviadas.
+      </p>
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(dados ?? []).length === 0}>
+        <div className="space-y-2">
+          {(dados ?? []).map((m) => (
+            <CardMensagemFila key={m.id} m={m} contato={contatoDe(m.telefone)} recarregar={recarregar} />
+          ))}
+        </div>
+      </Estado>
     </div>
   );
 }
@@ -2128,6 +2261,7 @@ const NAV = [
   { id: "eventos", label: "Eventos", icon: CalendarDays, C: Eventos },
   { id: "oportunidades", label: "Oportunidades", icon: Star, C: Oportunidades },
   { id: "mensagens", label: "Conversas", icon: MessageSquare, C: Conversas },
+  { id: "fila", label: "Fila de mensagens", icon: Clock, C: Fila },
 ];
 
 const NAV_PROFESSOR = ["painel", "alunos", "experimentais", "professores", "eventos"];
