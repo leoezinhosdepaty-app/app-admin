@@ -466,6 +466,25 @@ Todo mês a Priscila manda pra escola (INSA/MPAC) a lista de quem pagou, pra cal
 - Tudo isso é direto Supabase (sem endpoint novo no backend) — só o `apiAuth`/`abrirPdfAutenticado` do relatório de repasse usa o backend.
 - Testado com dados isolados/fictícios antes de publicar (não dá pra testar clicando de verdade sem logar como usuário real, e alguns fluxos aqui geram mensagem de WhatsApp de verdade pra família — evitado de propósito).
 
+## Contagem de aulas dadas por professor (2026-09-29, a pedido da Priscila)
+
+A negociação com professor é por aula dada no mês, então precisava contar isso. **Reaproveitei a tabela `aulas`** — já existia no schema original (`turma_id`, `professor_id`, `data`, `realizada`) mas nunca tinha sido usada em lugar nenhum do app.
+
+- **Migração**: `turma_id` virou opcional (`ALTER TABLE aulas ALTER COLUMN turma_id DROP NOT NULL`) — não tem UI ainda pra vincular professor↔turma (tabela `professores_turmas`, também nunca usada), e a Priscila só precisa do **total do mês**, não de qual turma. Se um dia precisar detalhar por turma, a coluna já existe, só falta a UI de vínculo.
+- Em **Professores**, cada card tem uma seção "Aulas do mês" (fecha/abre) com navegação de mês (◀▶), contagem de aulas e o valor total (nº de aulas × `valor_hora_aula` do professor), lista das datas registradas, e um campo de data + botão "Registrar aula".
+- **Editar/registrar/apagar é só pra equipe** (`role !== "professor"`) — o professor (se tiver login) só vê a contagem, não mexe nela, pra evitar autodeclaração sem checagem. Se a Priscila preferir que o próprio professor registre as aulas que deu, é só tirar essa trava.
+- Sem trava de "1 aula por dia" — um professor pode dar mais de uma aula no mesmo dia (turmas diferentes), então registrar duas vezes na mesma data é permitido de propósito.
+- Testado direto no banco (insert/consulta/delete simulando exatamente a query do front) com o professor real William Ponciano Baltar antes de publicar, e limpo os dados de teste depois.
+
+## Tela de Configurações + catálogo de Categoria (2026-09-29, a pedido da Priscila)
+
+Nova tela **Configurações** (só pra equipe, fora do menu do professor) com 5 abas: Turmas, Categorias, Locais, Planos, Professor × Turma.
+
+- **Turmas/Categorias/Locais/Planos**: CRUD simples (criar, editar, ativar/desativar). Desativar em vez de apagar de verdade — essas tabelas são referenciadas por alunos/matrículas/cobranças, apagar quebraria a integridade.
+- **Professor × Turma**: usa a tabela `professores_turmas` (existia no schema, nunca usada) — botões pra marcar quais turmas cada professor dá aula.
+- **Nova tabela `categorias`** (`nome`, `ativo`) — a categoria do aluno/experimental era texto livre até aqui, e os dados reais tinham a mesma categoria escrita de 2-3 jeitos diferentes (`"Sub 6"`, `"Sub06"`, `"sub 12"`, `"Sub 12"` etc.). **Normalizei os dados existentes** pros 6 valores corretos (Sub 6/7/9/11/12/13) e troquei os 3 campos de texto livre de categoria (novo aluno, editar aluno, nova experimental) por `select` puxando dessa tabela — a coluna `categoria` em `alunos`/`experimentais` continua sendo texto (guarda o nome, não o id), só o input que virou controlado.
+- Testado com insert/update/delete simulando as queries do front pra cada tabela nova, direto no banco (não dava pra clicar de verdade, sessão de login não persistiu na sessão de testes) — tudo limpo depois.
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.

@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   LayoutDashboard, Users, ClipboardList, Wallet, Award, CalendarDays,
   MessageSquare, Search, ArrowRight, AlertCircle, X, Plus, RefreshCw, LogOut,
-  FileText, Power, Pencil, Eye, EyeOff, Trash2, KeyRound, Star, Send, Clock
+  FileText, Power, Pencil, Eye, EyeOff, Trash2, KeyRound, Star, Send, Clock, Settings
 } from "lucide-react";
 import SeletorFoto from "./SeletorFoto.jsx";
 
@@ -163,6 +163,24 @@ const qPlanosAtivos = () => supabase
 const qLocaisAtivos = () => supabase
   .from("locais").select("id, nome").eq("ativo", true).order("nome");
 
+const qCategoriasAtivas = () => supabase
+  .from("categorias").select("id, nome").eq("ativo", true).order("nome");
+
+const qTurmasTodas = () => supabase
+  .from("turmas").select("*, locais ( nome )").order("dias");
+
+const qCategoriasTodas = () => supabase
+  .from("categorias").select("*").order("nome");
+
+const qLocaisTodos = () => supabase
+  .from("locais").select("*").order("nome");
+
+const qPlanosTodos = () => supabase
+  .from("planos").select("*").order("valor");
+
+const qProfessoresTurmas = () => supabase
+  .from("professores_turmas").select("professor_id, turma_id");
+
 const qConversas = () => supabase
   .from("conversas").select("*").order("ultima_resposta", { ascending: false, nullsFirst: false });
 
@@ -177,6 +195,13 @@ const qThread = (telefone) => supabase
 
 const qFila = () => supabase
   .from("mensagens").select("*").eq("status", "na_fila").order("agendada_para", { ascending: true }).limit(300);
+
+const qAulasMes = (professorId, ano, mes) => {
+  const inicio = `${ano}-${String(mes).padStart(2, "0")}-01`;
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  const fim = `${ano}-${String(mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+  return supabase.from("aulas").select("*").eq("professor_id", professorId).gte("data", inicio).lte("data", fim).order("data");
+};
 
 const qExperimentaisSemana = () => {
   const hoje = new Date();
@@ -374,6 +399,7 @@ function Painel({ ir }) {
   const alunos = useQuery("alunos", qAlunos);
   const cobrancas = useQuery("cobrancas", qCobrancas);
   const experimentaisSemana = useQuery("exp-semana", qExperimentaisSemana);
+  const { dados: categoriasPainel } = useQuery("categorias-ativas", qCategoriasAtivas);
   const [criandoAluno, setCriandoAluno] = useState(false);
 
   const lista = alunos.dados ?? [];
@@ -473,17 +499,17 @@ function Painel({ ir }) {
 
       {criandoAluno && (
         <ModalForm titulo="Novo aluno" fechar={() => setCriandoAluno(false)}
-          campos={CAMPOS_NOVO_ALUNO}
+          campos={CAMPOS_NOVO_ALUNO(categoriasPainel)}
           aoSalvar={async (v) => { await criarAlunoNovo(v); alunos.recarregar(); }} />
       )}
     </div>
   );
 }
 
-const CAMPOS_NOVO_ALUNO = [
+const CAMPOS_NOVO_ALUNO = (categorias) => [
   { chave: "aluno_nome", label: "Nome do aluno", obrigatorio: true },
   { chave: "aluno_nascimento", label: "Data de nascimento", tipo: "date" },
-  { chave: "categoria", label: "Categoria" },
+  { chave: "categoria", label: "Categoria", tipo: "select", opcoes: (categorias ?? []).map((c) => ({ value: c.nome, label: c.nome })) },
   { chave: "responsavel_nome", label: "Nome do responsável", obrigatorio: true },
   { chave: "responsavel_telefone", label: "Telefone do responsável", obrigatorio: true },
   { chave: "responsavel_cpf", label: "CPF do responsável" },
@@ -513,6 +539,7 @@ const STATUS_ALUNO_FILTROS = ["Todos", "ativo", "pendente", "inativo"];
 
 function Alunos() {
   const { dados, erro, carregando, recarregar } = useQuery("alunos", qAlunos);
+  const { dados: categorias } = useQuery("categorias-ativas", qCategoriasAtivas);
   const [busca, setBusca] = useState("");
   const [local, setLocal] = useState("Todos");
   const [statusFiltro, setStatusFiltro] = useState("ativo");
@@ -577,7 +604,7 @@ function Alunos() {
 
       {criando && (
         <ModalForm titulo="Novo aluno" fechar={() => setCriando(false)}
-          campos={CAMPOS_NOVO_ALUNO}
+          campos={CAMPOS_NOVO_ALUNO(categorias)}
           aoSalvar={async (v) => { await criarAlunoNovo(v); recarregar(); }} />
       )}
     </div>
@@ -637,6 +664,7 @@ function Ficha({ a, fechar, recarregar }) {
   const pend = pendenciasDe(a);
   const { dados: turmas } = useQuery("turmas-ativas", qTurmasAtivas);
   const { dados: planos } = useQuery("planos-ativos", qPlanosAtivos);
+  const { dados: categorias } = useQuery("categorias-ativas", qCategoriasAtivas);
   const [gerando, setGerando] = useState(false);
   const [editando, setEditando] = useState(false);
   const [descricao, setDescricao] = useState(mat ? `Mensalidade - ${a.nome}` : `Cobrança avulsa - ${a.nome}`);
@@ -950,7 +978,10 @@ function Ficha({ a, fechar, recarregar }) {
           campos={[
             { chave: "nome", label: "Nome do aluno", obrigatorio: true, padrao: a.nome },
             { chave: "nascimento", label: "Data de nascimento", tipo: "date", padrao: a.nascimento ?? "" },
-            { chave: "categoria", label: "Categoria", padrao: a.categoria ?? "" },
+            {
+              chave: "categoria", label: "Categoria", tipo: "select", padrao: a.categoria ?? "",
+              opcoes: (categorias ?? []).map((c) => ({ value: c.nome, label: c.nome })),
+            },
             { chave: "tamanho_uniforme", label: "Tamanho do uniforme", padrao: a.tamanho_uniforme ?? "" },
             {
               chave: "turma_id", label: "Turma", tipo: "select", padrao: a.turmas?.id ?? "",
@@ -1096,6 +1127,7 @@ function CardExperimental({ e, recarregar }) {
 function Experimentais() {
   const { dados, erro, carregando, recarregar } = useQuery("exp", qExperimentais);
   const { dados: turmas } = useQuery("turmas-ativas", qTurmasAtivas);
+  const { dados: categorias } = useQuery("categorias-ativas", qCategoriasAtivas);
   const [criando, setCriando] = useState(false);
 
   return (
@@ -1115,7 +1147,10 @@ function Experimentais() {
             { chave: "responsavel_nome", label: "Nome do responsável", obrigatorio: true },
             { chave: "telefone", label: "Telefone (WhatsApp)", obrigatorio: true },
             { chave: "email", label: "E-mail", tipo: "email" },
-            { chave: "categoria", label: "Categoria" },
+            {
+              chave: "categoria", label: "Categoria", tipo: "select",
+              opcoes: (categorias ?? []).map((c) => ({ value: c.nome, label: c.nome })),
+            },
             {
               chave: "turma_id", label: "Turma", tipo: "select",
               opcoes: (turmas ?? []).map((t) => ({ value: t.id, label: `${t.locais?.nome} · ${t.dias} · ${String(t.horario).slice(0, 5)}` })),
@@ -1450,7 +1485,7 @@ const CAMPOS_PROFESSOR = (padrao = {}) => [
   { chave: "nome", label: "Nome completo", obrigatorio: true, padrao: padrao.nome },
   { chave: "telefone", label: "Telefone", obrigatorio: true, padrao: padrao.telefone },
   { chave: "endereco", label: "Endereço", padrao: padrao.endereco },
-  { chave: "cref", label: "CREF", padrao: padrao.cref },
+  { chave: "cref", label: "CREF/CPF", padrao: padrao.cref },
   { chave: "nascimento", label: "Data de nascimento", tipo: "date", padrao: padrao.nascimento ?? "" },
   { chave: "valor_hora_aula", label: "Valor por aula (R$)", tipo: "number", padrao: String(padrao.valor_hora_aula ?? "0") },
   { chave: "pix", label: "Chave Pix", padrao: padrao.pix },
@@ -1526,6 +1561,93 @@ function GerarAcessoProfessor({ p, fechar }) {
   );
 }
 
+function AulasProfessor({ professor, podeEditar }) {
+  const hoje = new Date();
+  const [ano, setAno] = useState(hoje.getFullYear());
+  const [mes, setMes] = useState(hoje.getMonth() + 1);
+  const [aberto, setAberto] = useState(false);
+  const [novaData, setNovaData] = useState(hoje.toISOString().slice(0, 10));
+  const [registrando, setRegistrando] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  const { dados, carregando, recarregar } = useQuery(
+    `aulas-${professor.id}-${ano}-${mes}`, () => qAulasMes(professor.id, ano, mes), [professor.id, ano, mes]
+  );
+
+  const mudarMes = (delta) => {
+    let m = mes + delta, a = ano;
+    if (m < 1) { m = 12; a -= 1; }
+    if (m > 12) { m = 1; a += 1; }
+    setMes(m); setAno(a);
+  };
+
+  const registrar = async () => {
+    setRegistrando(true);
+    setErro(null);
+    const { error } = await supabase.from("aulas").insert({ professor_id: professor.id, data: novaData });
+    setRegistrando(false);
+    if (error) { setErro(error.message); return; }
+    recarregar();
+  };
+
+  const apagar = async (id) => {
+    if (!window.confirm("Remover esse registro de aula?")) return;
+    const { error } = await supabase.from("aulas").delete().eq("id", id);
+    if (!error) recarregar();
+  };
+
+  const total = (dados ?? []).length;
+  const valorTotal = total * Number(professor.valor_hora_aula || 0);
+
+  return (
+    <div className="mt-3 border-t pt-3" style={{ borderColor: "#E6E9F2" }} onClick={(e) => e.stopPropagation()}>
+      <button onClick={() => setAberto((v) => !v)} className="text-xs font-semibold" style={{ color: NAVY }}>
+        {aberto ? "▾" : "▸"} Aulas do mês
+      </button>
+      {aberto && (
+        <div className="mt-2">
+          <div className="mb-2 flex items-center gap-2">
+            <button onClick={() => mudarMes(-1)} aria-label="Mês anterior" className="px-1 text-xs" style={{ color: "#7A85A3" }}>◀</button>
+            <span className="text-xs font-semibold" style={{ color: NAVY }}>{MESES_NOME[mes - 1]}/{ano}</span>
+            <button onClick={() => mudarMes(1)} aria-label="Mês seguinte" className="px-1 text-xs" style={{ color: "#7A85A3" }}>▶</button>
+          </div>
+          {carregando ? (
+            <p className="text-xs" style={{ color: "#5C678A" }}>Carregando…</p>
+          ) : (
+            <>
+              <p className="text-sm font-bold" style={{ color: NAVY }}>
+                {total} aula{total === 1 ? "" : "s"} · <Valor>{brl(valorTotal)}</Valor>
+              </p>
+              {total > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {dados.map((a) => (
+                    <li key={a.id} className="flex items-center justify-between text-xs" style={{ color: "#5C678A" }}>
+                      {dataBr(a.data)}
+                      {podeEditar && (
+                        <button onClick={() => apagar(a.id)} aria-label="Remover registro"><Trash2 size={12} style={{ color: CLAY }} /></button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {podeEditar && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input type="date" value={novaData} onChange={(e) => setNovaData(e.target.value)}
+                    className="rounded-lg border px-2 py-1 text-xs" style={{ borderColor: "#E6E9F2" }} />
+                  <Botao tom="ghost" onClick={registrar} disabled={registrando}>
+                    {registrando ? "Registrando…" : "Registrar aula"}
+                  </Botao>
+                </div>
+              )}
+              {erro && <p className="mt-1 text-xs font-semibold" style={{ color: CLAY }}>{erro}</p>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Professores() {
   const { role } = usePerfil();
   const { dados, erro, carregando, recarregar } = useQuery("prof", qProfessores);
@@ -1554,7 +1676,7 @@ function Professores() {
                 <div className={role !== "professor" ? "cursor-pointer" : ""} onClick={() => role !== "professor" && setEditando(p)}>
                   <p className="font-semibold" style={{ color: NAVY }}>{p.nome}{p.estagiario ? " · Estagiário(a)" : ""}</p>
                   <p className="text-xs" style={{ color: "#5C678A" }}>
-                    {p.cref ? `CREF ${p.cref} · ` : ""}{p.telefone} · <Valor>{brl(p.valor_hora_aula)}</Valor>/aula
+                    {p.cref ? `CREF/CPF ${p.cref} · ` : ""}{p.telefone} · <Valor>{brl(p.valor_hora_aula)}</Valor>/aula
                     {p.user_id ? " · tem acesso ao app" : ""}
                   </p>
                 </div>
@@ -1572,6 +1694,7 @@ function Professores() {
                   </div>
                 )}
               </div>
+              <AulasProfessor professor={p} podeEditar={role !== "professor"} />
             </Card>
           ))}
         </div>
@@ -2251,6 +2374,315 @@ function Fila() {
   );
 }
 
+function ConfigTurmas() {
+  const { dados, erro, carregando, recarregar } = useQuery("turmas-todas", qTurmasTodas);
+  const { dados: locais } = useQuery("locais-todos-cfg-turmas", qLocaisTodos);
+  const [criando, setCriando] = useState(false);
+  const [editando, setEditando] = useState(null);
+
+  const alternarAtivo = async (t) => {
+    const { error } = await supabase.from("turmas").update({ ativo: !t.ativo }).eq("id", t.id);
+    if (!error) recarregar();
+  };
+
+  const campos = (padrao = {}) => [
+    {
+      chave: "local_id", label: "Local", tipo: "select", obrigatorio: true, padrao: padrao.local_id ?? "",
+      opcoes: (locais ?? []).map((l) => ({ value: l.id, label: l.nome })),
+    },
+    { chave: "dias", label: "Dias (ex: 3ª e 5ª, Sábado)", obrigatorio: true, padrao: padrao.dias },
+    { chave: "horario", label: "Horário", tipo: "time", obrigatorio: true, padrao: padrao.horario?.slice(0, 5) },
+    { chave: "idade_min", label: "Idade mínima", tipo: "number", obrigatorio: true, padrao: String(padrao.idade_min ?? "") },
+    { chave: "idade_max", label: "Idade máxima", tipo: "number", obrigatorio: true, padrao: String(padrao.idade_max ?? "") },
+    { chave: "capacidade", label: "Capacidade (opcional)", tipo: "number", padrao: padrao.capacidade != null ? String(padrao.capacidade) : "" },
+  ];
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-bold" style={{ color: NAVY }}>Turmas</h3>
+        <Botao icon={Plus} tom="ghost" onClick={() => setCriando(true)}>Nova turma</Botao>
+      </div>
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(dados ?? []).length === 0}>
+        <div className="space-y-2">
+          {(dados ?? []).map((t) => (
+            <Card key={t.id}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="cursor-pointer" onClick={() => setEditando(t)}>
+                  <p className="font-semibold" style={{ color: NAVY }}>{t.locais?.nome} · {t.dias} · {String(t.horario).slice(0, 5)}</p>
+                  <p className="text-xs" style={{ color: "#5C678A" }}>
+                    {t.idade_min} a {t.idade_max} anos{t.capacidade ? ` · capacidade ${t.capacidade}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Tag s={t.ativo ? "ativo" : "inativo"} />
+                  <button onClick={() => alternarAtivo(t)} className="text-xs font-semibold" style={{ color: CLAY }}>
+                    {t.ativo ? "Desativar" : "Ativar"}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </Estado>
+      {(criando || editando) && (
+        <ModalForm titulo={editando ? "Editar turma" : "Nova turma"} fechar={() => { setCriando(false); setEditando(null); }}
+          campos={campos(editando ?? {})}
+          aoSalvar={async (v) => {
+            const valores = {
+              local_id: v.local_id, dias: v.dias, horario: v.horario,
+              idade_min: Number(v.idade_min), idade_max: Number(v.idade_max),
+              capacidade: v.capacidade ? Number(v.capacidade) : null,
+            };
+            const { error } = editando
+              ? await supabase.from("turmas").update(valores).eq("id", editando.id)
+              : await supabase.from("turmas").insert({ ...valores, ativo: true });
+            if (error) throw error;
+            recarregar();
+          }} />
+      )}
+    </div>
+  );
+}
+
+function ConfigCategorias() {
+  const { dados, erro, carregando, recarregar } = useQuery("categorias-todas", qCategoriasTodas);
+  const [criando, setCriando] = useState(false);
+  const [editando, setEditando] = useState(null);
+
+  const alternarAtivo = async (c) => {
+    const { error } = await supabase.from("categorias").update({ ativo: !c.ativo }).eq("id", c.id);
+    if (!error) recarregar();
+  };
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-bold" style={{ color: NAVY }}>Categorias</h3>
+        <Botao icon={Plus} tom="ghost" onClick={() => setCriando(true)}>Nova categoria</Botao>
+      </div>
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(dados ?? []).length === 0}>
+        <div className="space-y-2">
+          {(dados ?? []).map((c) => (
+            <Card key={c.id}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="cursor-pointer font-semibold" style={{ color: NAVY }} onClick={() => setEditando(c)}>{c.nome}</p>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Tag s={c.ativo ? "ativo" : "inativo"} />
+                  <button onClick={() => alternarAtivo(c)} className="text-xs font-semibold" style={{ color: CLAY }}>
+                    {c.ativo ? "Desativar" : "Ativar"}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </Estado>
+      {(criando || editando) && (
+        <ModalForm titulo={editando ? "Editar categoria" : "Nova categoria"} fechar={() => { setCriando(false); setEditando(null); }}
+          campos={[{ chave: "nome", label: "Nome", obrigatorio: true, padrao: editando?.nome ?? "" }]}
+          aoSalvar={async (v) => {
+            const { error } = editando
+              ? await supabase.from("categorias").update({ nome: v.nome }).eq("id", editando.id)
+              : await supabase.from("categorias").insert({ nome: v.nome, ativo: true });
+            if (error) throw error;
+            recarregar();
+          }} />
+      )}
+    </div>
+  );
+}
+
+function ConfigLocais() {
+  const { dados, erro, carregando, recarregar } = useQuery("locais-todos-cfg", qLocaisTodos);
+  const [criando, setCriando] = useState(false);
+  const [editando, setEditando] = useState(null);
+
+  const alternarAtivo = async (l) => {
+    const { error } = await supabase.from("locais").update({ ativo: !l.ativo }).eq("id", l.id);
+    if (!error) recarregar();
+  };
+
+  const campos = (padrao = {}) => [
+    { chave: "nome", label: "Nome (ex: INSA)", obrigatorio: true, padrao: padrao.nome },
+    { chave: "endereco", label: "Endereço", obrigatorio: true, padrao: padrao.endereco },
+    { chave: "cidade", label: "Cidade", obrigatorio: true, padrao: padrao.cidade },
+    { chave: "handle_infinitepay", label: "Handle InfinitePay", padrao: padrao.handle_infinitepay },
+  ];
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-bold" style={{ color: NAVY }}>Locais</h3>
+        <Botao icon={Plus} tom="ghost" onClick={() => setCriando(true)}>Novo local</Botao>
+      </div>
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(dados ?? []).length === 0}>
+        <div className="space-y-2">
+          {(dados ?? []).map((l) => (
+            <Card key={l.id}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="cursor-pointer" onClick={() => setEditando(l)}>
+                  <p className="font-semibold" style={{ color: NAVY }}>{l.nome}</p>
+                  <p className="text-xs" style={{ color: "#5C678A" }}>{l.endereco} · {l.cidade}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Tag s={l.ativo ? "ativo" : "inativo"} />
+                  <button onClick={() => alternarAtivo(l)} className="text-xs font-semibold" style={{ color: CLAY }}>
+                    {l.ativo ? "Desativar" : "Ativar"}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </Estado>
+      {(criando || editando) && (
+        <ModalForm titulo={editando ? "Editar local" : "Novo local"} fechar={() => { setCriando(false); setEditando(null); }}
+          campos={campos(editando ?? {})}
+          aoSalvar={async (v) => {
+            const valores = { nome: v.nome, endereco: v.endereco, cidade: v.cidade, handle_infinitepay: v.handle_infinitepay || null };
+            const { error } = editando
+              ? await supabase.from("locais").update(valores).eq("id", editando.id)
+              : await supabase.from("locais").insert({ ...valores, ativo: true });
+            if (error) throw error;
+            recarregar();
+          }} />
+      )}
+    </div>
+  );
+}
+
+function ConfigPlanos() {
+  const { dados, erro, carregando, recarregar } = useQuery("planos-todos-cfg", qPlanosTodos);
+  const [criando, setCriando] = useState(false);
+  const [editando, setEditando] = useState(null);
+
+  const alternarAtivo = async (p) => {
+    const { error } = await supabase.from("planos").update({ ativo: !p.ativo }).eq("id", p.id);
+    if (!error) recarregar();
+  };
+
+  const campos = (padrao = {}) => [
+    { chave: "nome", label: "Nome do plano", obrigatorio: true, padrao: padrao.nome },
+    { chave: "frequencia_semanal", label: "Frequência semanal (x/semana)", tipo: "number", obrigatorio: true, padrao: String(padrao.frequencia_semanal ?? "") },
+    { chave: "valor", label: "Valor (R$)", tipo: "number", obrigatorio: true, padrao: String(padrao.valor ?? "") },
+  ];
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-bold" style={{ color: NAVY }}>Planos</h3>
+        <Botao icon={Plus} tom="ghost" onClick={() => setCriando(true)}>Novo plano</Botao>
+      </div>
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(dados ?? []).length === 0}>
+        <div className="space-y-2">
+          {(dados ?? []).map((p) => (
+            <Card key={p.id}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="cursor-pointer" onClick={() => setEditando(p)}>
+                  <p className="font-semibold" style={{ color: NAVY }}>{p.nome}</p>
+                  <p className="text-xs" style={{ color: "#5C678A" }}><Valor>{brl(p.valor)}</Valor> · {p.frequencia_semanal}x/semana</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Tag s={p.ativo ? "ativo" : "inativo"} />
+                  <button onClick={() => alternarAtivo(p)} className="text-xs font-semibold" style={{ color: CLAY }}>
+                    {p.ativo ? "Desativar" : "Ativar"}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </Estado>
+      {(criando || editando) && (
+        <ModalForm titulo={editando ? "Editar plano" : "Novo plano"} fechar={() => { setCriando(false); setEditando(null); }}
+          campos={campos(editando ?? {})}
+          aoSalvar={async (v) => {
+            const valores = { nome: v.nome, frequencia_semanal: Number(v.frequencia_semanal), valor: Number(v.valor) };
+            const { error } = editando
+              ? await supabase.from("planos").update(valores).eq("id", editando.id)
+              : await supabase.from("planos").insert({ ...valores, ativo: true });
+            if (error) throw error;
+            recarregar();
+          }} />
+      )}
+    </div>
+  );
+}
+
+function ConfigVinculoProfessores() {
+  const { dados: professores, erro, carregando, recarregar } = useQuery("professores-cfg", qProfessores);
+  const { dados: turmas } = useQuery("turmas-todas-cfg", qTurmasTodas);
+  const { dados: vinculos, recarregar: recarregarVinculos } = useQuery("professores-turmas-cfg", qProfessoresTurmas);
+  const [salvando, setSalvando] = useState(null);
+
+  const turmasDe = (professorId) => new Set((vinculos ?? []).filter((v) => v.professor_id === professorId).map((v) => v.turma_id));
+
+  const alternar = async (professorId, turmaId, marcar) => {
+    setSalvando(`${professorId}-${turmaId}`);
+    if (marcar) await supabase.from("professores_turmas").insert({ professor_id: professorId, turma_id: turmaId });
+    else await supabase.from("professores_turmas").delete().eq("professor_id", professorId).eq("turma_id", turmaId);
+    setSalvando(null);
+    recarregarVinculos();
+  };
+
+  return (
+    <div>
+      <h3 className="mb-1 font-bold" style={{ color: NAVY }}>Professor × Turma</h3>
+      <p className="mb-4 text-sm" style={{ color: "#5C678A" }}>Marque as turmas que cada professor dá aula.</p>
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={(professores ?? []).length === 0}>
+        <div className="space-y-3">
+          {(professores ?? []).map((p) => (
+            <Card key={p.id}>
+              <p className="mb-2 font-semibold" style={{ color: NAVY }}>{p.nome}</p>
+              <div className="flex flex-wrap gap-2">
+                {(turmas ?? []).map((t) => {
+                  const marcado = turmasDe(p.id).has(t.id);
+                  return (
+                    <button key={t.id} disabled={salvando === `${p.id}-${t.id}`}
+                      onClick={() => alternar(p.id, t.id, !marcado)}
+                      className="rounded-xl px-3 py-1.5 text-xs font-semibold"
+                      style={marcado ? { background: NAVY, color: "#fff" } : { background: "#F4F2EC", color: NAVY }}>
+                      {t.locais?.nome} · {t.dias} · {String(t.horario).slice(0, 5)}
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+          ))}
+        </div>
+      </Estado>
+    </div>
+  );
+}
+
+const CONFIG_SECOES = [
+  { id: "turmas", label: "Turmas", C: ConfigTurmas },
+  { id: "categorias", label: "Categorias", C: ConfigCategorias },
+  { id: "locais", label: "Locais", C: ConfigLocais },
+  { id: "planos", label: "Planos", C: ConfigPlanos },
+  { id: "vinculo", label: "Professor × Turma", C: ConfigVinculoProfessores },
+];
+
+function Configuracoes() {
+  const [secao, setSecao] = useState("turmas");
+  const Secao = CONFIG_SECOES.find((s) => s.id === secao)?.C ?? ConfigTurmas;
+  return (
+    <div>
+      <Titulo>Configurações</Titulo>
+      <div className="mb-4 flex flex-wrap gap-2">
+        {CONFIG_SECOES.map((s) => (
+          <button key={s.id} onClick={() => setSecao(s.id)} className="rounded-xl px-3 py-2 text-sm font-semibold"
+            style={secao === s.id ? { background: NAVY, color: "#fff" } : { background: "#fff", color: NAVY }}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <Secao />
+    </div>
+  );
+}
+
 /* ------------------------------ shell ------------------------------ */
 const NAV = [
   { id: "painel", label: "Painel", icon: LayoutDashboard, C: Painel },
@@ -2262,6 +2694,7 @@ const NAV = [
   { id: "oportunidades", label: "Oportunidades", icon: Star, C: Oportunidades },
   { id: "mensagens", label: "Conversas", icon: MessageSquare, C: Conversas },
   { id: "fila", label: "Fila de mensagens", icon: Clock, C: Fila },
+  { id: "configuracoes", label: "Configurações", icon: Settings, C: Configuracoes },
 ];
 
 const NAV_PROFESSOR = ["painel", "alunos", "experimentais", "professores", "eventos"];
