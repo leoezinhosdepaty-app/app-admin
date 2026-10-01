@@ -4,6 +4,16 @@ import { enviarWhatsapp, enviarMidia } from "./uazapi.js";
 const MAX_TENTATIVAS = 3;
 const LOTE = 5; // quantas mensagens processa por tick
 const JANELA_ATENDIMENTO_HORAS = 6; // por quanto tempo a fila fica pausada depois de uma resposta humana
+const LIMITE_TRAVADA_MS = 15 * 60 * 1000; // tempo em "enviando" antes de considerar travada (reinício do servidor no meio do envio)
+
+// mensagens disparadas por uma ação manual da equipe (converter em matrícula, enviar
+// convite, remarcar experimental...) são uma resposta espontânea de alguém da equipe —
+// não fazem sentido esperar a pausa de "humano atendendo", que existe pra não cruzar
+// com uma rotina automática (cobrança, lembrete) logo depois de o responsável escrever.
+const TIPOS_SEM_PAUSA = new Set([
+  "manual", "convite_processo", "convite_matricula", "convite_anamnese",
+  "convite_experimental", "convite_contrato", "reagendamento_experimental",
+]);
 
 // espaçamento entre disparos — variável (não é sempre o mesmo intervalo) pra não
 // parecer robô e arriscar bloqueio do número no WhatsApp.
@@ -28,7 +38,29 @@ function dentroDaJanela() {
   return hora >= 8 && hora < 21;
 }
 
+/* Mensagens que ficaram travadas em "enviando" (o servidor reiniciou/caiu no meio do
+   envio, por exemplo durante um deploy) nunca mais seriam pegas, porque a consulta
+   principal só olha pra "na_fila" — isso roda em todo tick, mesmo fora da janela de
+   envio, só pra destravar, não pra mandar nada. */
+async function recuperarTravadas() {
+  const { data: travadas, error } = await db.from("mensagens")
+    .select("id, tentativas")
+    .eq("status", "enviando")
+    .lt("agendada_para", new Date(Date.now() - LIMITE_TRAVADA_MS).toISOString());
+  if (error) { console.error("recuperarTravadas:", error); return; }
+
+  for (const m of travadas ?? []) {
+    const tentativas = (m.tentativas ?? 0) + 1;
+    await db.from("mensagens").update({
+      tentativas,
+      status: tentativas >= MAX_TENTATIVAS ? "falhou" : "na_fila",
+      erro: "Recuperada automaticamente após travar em 'enviando' (provável reinício do servidor no meio do envio).",
+    }).eq("id", m.id);
+  }
+}
+
 export async function processarFila() {
+  await recuperarTravadas();
   if (!dentroDaJanela()) return;
 
   const { data: pendentes, error } = await db.from("mensagens")
@@ -42,7 +74,7 @@ export async function processarFila() {
   for (const m of pendentes ?? []) {
     const { data: conversa } = await db.from("conversas").select("em_atendimento_humano, ultima_resposta").eq("telefone", m.telefone).maybeSingle();
     const horasDesdeResposta = conversa?.ultima_resposta ? (Date.now() - new Date(conversa.ultima_resposta).getTime()) / 3600000 : Infinity;
-    if (conversa?.em_atendimento_humano && horasDesdeResposta < JANELA_ATENDIMENTO_HORAS) continue; // pausado — resposta humana recente
+    if (!TIPOS_SEM_PAUSA.has(m.tipo) && conversa?.em_atendimento_humano && horasDesdeResposta < JANELA_ATENDIMENTO_HORAS) continue; // pausado — resposta humana recente
 
     // trava a mensagem antes de esperar, pra um tick seguinte não pegar ela de novo
     const { data: travada, error: erroTrava } = await db.from("mensagens").update({ status: "enviando" })

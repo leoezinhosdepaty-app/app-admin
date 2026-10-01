@@ -540,17 +540,25 @@ const STATUS_ALUNO_FILTROS = ["Todos", "ativo", "pendente", "inativo"];
 function Alunos() {
   const { dados, erro, carregando, recarregar } = useQuery("alunos", qAlunos);
   const { dados: categorias } = useQuery("categorias-ativas", qCategoriasAtivas);
+  const { dados: turmas } = useQuery("turmas-ativas", qTurmasAtivas);
   const [busca, setBusca] = useState("");
   const [local, setLocal] = useState("Todos");
+  const [turmaFiltro, setTurmaFiltro] = useState("Todas");
   const [statusFiltro, setStatusFiltro] = useState("ativo");
   const [aberto, setAberto] = useState(null);
   const [criando, setCriando] = useState(false);
 
+  const turmasDoFiltro = useMemo(
+    () => (turmas ?? []).filter((t) => local === "Todos" || t.locais?.nome === local),
+    [turmas, local]
+  );
+
   const lista = useMemo(() => (dados ?? []).filter((a) =>
     a.nome?.toLowerCase().includes(busca.toLowerCase()) &&
     (local === "Todos" || a.turmas?.locais?.nome === local) &&
+    (turmaFiltro === "Todas" || a.turmas?.id === turmaFiltro) &&
     (statusFiltro === "Todos" || a.status === statusFiltro)
-  ), [dados, busca, local, statusFiltro]);
+  ), [dados, busca, local, turmaFiltro, statusFiltro]);
 
   return (
     <div>
@@ -563,9 +571,16 @@ function Alunos() {
             className="w-full bg-transparent text-sm outline-none" style={{ color: NAVY }} />
         </div>
         {["Todos", ...UNIDADES].map((l) => (
-          <button key={l} onClick={() => setLocal(l)} className="rounded-xl px-3 py-2 text-sm font-semibold"
+          <button key={l} onClick={() => { setLocal(l); setTurmaFiltro("Todas"); }} className="rounded-xl px-3 py-2 text-sm font-semibold"
             style={local === l ? { background: NAVY, color: "#fff" } : { background: "#fff", color: NAVY }}>{l}</button>
         ))}
+        <select value={turmaFiltro} onChange={(e) => setTurmaFiltro(e.target.value)}
+          className="rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2", color: NAVY }}>
+          <option value="Todas">Todas as turmas</option>
+          {turmasDoFiltro.map((t) => (
+            <option key={t.id} value={t.id}>{turmaTxt(t)}</option>
+          ))}
+        </select>
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2">

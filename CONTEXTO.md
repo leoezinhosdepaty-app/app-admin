@@ -485,6 +485,23 @@ Nova tela **Configurações** (só pra equipe, fora do menu do professor) com 5 
 - **Nova tabela `categorias`** (`nome`, `ativo`) — a categoria do aluno/experimental era texto livre até aqui, e os dados reais tinham a mesma categoria escrita de 2-3 jeitos diferentes (`"Sub 6"`, `"Sub06"`, `"sub 12"`, `"Sub 12"` etc.). **Normalizei os dados existentes** pros 6 valores corretos (Sub 6/7/9/11/12/13) e troquei os 3 campos de texto livre de categoria (novo aluno, editar aluno, nova experimental) por `select` puxando dessa tabela — a coluna `categoria` em `alunos`/`experimentais` continua sendo texto (guarda o nome, não o id), só o input que virou controlado.
 - Testado com insert/update/delete simulando as queries do front pra cada tabela nova, direto no banco (não dava pra clicar de verdade, sessão de login não persistiu na sessão de testes) — tudo limpo depois.
 
+## Filtro por turma em Alunos (2026-10-01)
+
+Dropdown "Todas as turmas" ao lado dos botões de unidade — a lista de opções já filtra pela unidade selecionada (INSA/MPAC/Karatê escolhida primeiro, turma depois).
+
+## Correções na fila de mensagens (2026-10-01, a pedido da Priscila)
+
+A Priscila reportou mensagens "presas" na fila, passando da hora programada. Investigando (`backend/src/worker.js`), achei duas causas de atraso que já eram **intencionais** (não bugs) e um bug real:
+
+- **Pausa de 6h por resposta humana** (`em_atendimento_humano`): quando o responsável manda mensagem no WhatsApp, a fila pausa pra aquele telefone por 6h — existe pra não cruzar uma rotina automática com uma resposta recente da família. Um convite de matrícula atrasou ~7h porque a resposta foi recebida bem no meio da espera, resetando o contador.
+- **Janela de envio (8h-21h)**: a rotina de cobrança roda 7h da manhã (`gerarCobrancasDoMes`, cron `0 7 * * *`), mas o envio só começa às 8h — por isso cobranças geradas nesse horário sempre esperam ~1h antes de sair. Comportamento esperado, não corrigido.
+- **Bug real encontrado**: uma mensagem de 21/08 ficou travada pra sempre em `status='enviando'` — o servidor caiu/reiniciou (provável deploy) bem no meio do envio dela, e como a consulta principal só olha `status='na_fila'`, ela nunca mais seria pega. **Cancelada manualmente.**
+
+Correções em `worker.js`:
+- **`recuperarTravadas()`**: roda em todo tick do cron (a cada minuto, inclusive fora da janela 8h-21h — só destrava, não manda nada), detecta mensagens em `enviando` há mais de 15min (`LIMITE_TRAVADA_MS`) e devolve pra `na_fila` (ou `falhou` se já bateu o limite de tentativas). Não precisou de coluna nova — usa o próprio `agendada_para` como referência de "há quanto tempo deveria ter sido processada".
+- **`TIPOS_SEM_PAUSA`**: a pedido explícito da Priscila/Laíse, mensagens de ação manual da equipe (`manual`, `convite_processo`, `convite_matricula`, `convite_anamnese`, `convite_experimental`, `convite_contrato`, `reagendamento_experimental`) **não respeitam mais a pausa de 6h** — faz sentido só pra rotina automática (cobrança, lembrete, aniversário), não pra algo que a equipe decidiu mandar agora. A janela de envio (8h-21h) continua valendo pra todo mundo, isso não foi pedido pra mudar.
+- Testado: recuperação de travada simulada com registro isolado (telefone falso, nunca chega a mandar de verdade) antes de publicar.
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.
