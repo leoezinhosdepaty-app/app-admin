@@ -11,9 +11,23 @@ const LIMITE_TRAVADA_MS = 15 * 60 * 1000; // tempo em "enviando" antes de consid
 // não fazem sentido esperar a pausa de "humano atendendo", que existe pra não cruzar
 // com uma rotina automática (cobrança, lembrete) logo depois de o responsável escrever.
 const TIPOS_SEM_PAUSA = new Set([
-  "manual", "convite_processo", "convite_matricula", "convite_anamnese",
+  "manual", "cobranca_manual", "convite_processo", "convite_matricula", "convite_anamnese",
   "convite_experimental", "convite_contrato", "reagendamento_experimental",
 ]);
+
+/* Cobrança e lembrete de atraso são automáticos e podem ficar horas na fila. Na hora
+   de mandar, confere se ainda fazem sentido: se a família pagou (ou a cobrança foi
+   cancelada) nesse meio tempo, ou se o aluno saiu, a mensagem não pode ir. */
+export async function motivoParaNaoEnviar(m) {
+  if (!m.aluno_id) return null;
+  if (m.tipo !== "cobranca_mensalidade" && !m.tipo?.startsWith("inadimplencia_d")) return null;
+  const { data: aluno } = await db.from("alunos").select("status").eq("id", m.aluno_id).maybeSingle();
+  if (aluno?.status === "inativo") return "aluno inativo";
+  const { data: abertas } = await db.from("cobrancas").select("id")
+    .eq("aluno_id", m.aluno_id).in("status", ["aberto", "vencido"]).limit(1);
+  if (!abertas?.length) return "não há mais cobrança em aberto (já paga ou cancelada)";
+  return null;
+}
 
 // espaçamento entre disparos — variável (não é sempre o mesmo intervalo) pra não
 // parecer robô e arriscar bloqueio do número no WhatsApp.
@@ -72,6 +86,13 @@ export async function processarFila() {
   if (error) { console.error("processarFila:", error); return; }
 
   for (const m of pendentes ?? []) {
+    const motivo = await motivoParaNaoEnviar(m);
+    if (motivo) {
+      await db.from("mensagens").update({ status: "cancelada", erro: `Cancelada automaticamente: ${motivo}.` })
+        .eq("id", m.id).eq("status", "na_fila");
+      continue;
+    }
+
     const { data: conversa } = await db.from("conversas").select("em_atendimento_humano, ultima_resposta").eq("telefone", m.telefone).maybeSingle();
     const horasDesdeResposta = conversa?.ultima_resposta ? (Date.now() - new Date(conversa.ultima_resposta).getTime()) / 3600000 : Infinity;
     if (!TIPOS_SEM_PAUSA.has(m.tipo) && conversa?.em_atendimento_humano && horasDesdeResposta < JANELA_ATENDIMENTO_HORAS) continue; // pausado — resposta humana recente

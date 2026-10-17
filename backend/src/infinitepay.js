@@ -82,6 +82,27 @@ export async function gerarLinkGenerico({ unidade, valor, descricao }) {
    Roda todo dia; cria a cobrança 7 dias antes do vencimento
    de cada aluno, sem duplicar.
    --------------------------------------------------------------- */
+const dataIso = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/* "Matrícula + Mensalidade" já inclui a mensalidade do primeiro ciclo: ela cobre
+   até o primeiro vencimento que cai em/depois do dia do pagamento. Sem isso o
+   gerador cobrava de novo logo em seguida (família pagou e recebeu cobrança). */
+export async function vencimentoCobertoPelaMatricula(alunoId, diaVencimento) {
+  const { data: pagas } = await db.from("cobrancas")
+    .select("pago_em, vencimento")
+    .eq("aluno_id", alunoId).eq("status", "pago").ilike("descricao", "Matrícula + Mensalidade%");
+  let coberto = null;
+  for (const p of pagas ?? []) {
+    const [y, mo, d] = (p.pago_em ?? p.vencimento).slice(0, 10).split("-").map(Number);
+    let primeiro = new Date(y, mo - 1, diaVencimento);
+    if (primeiro < new Date(y, mo - 1, d)) primeiro = new Date(y, mo, diaVencimento);
+    const iso = dataIso(primeiro);
+    if (!coberto || iso > coberto) coberto = iso;
+  }
+  return coberto;
+}
+
 export async function gerarCobrancasDoMes() {
   const { data: matriculas, error } = await db
     .from("matriculas")
@@ -98,56 +119,78 @@ export async function gerarCobrancasDoMes() {
   for (const m of matriculas) {
     const a = m.alunos;
     if (a.status === "inativo") continue;
+    let cobCriada = null; // pra desfazer se o link falhar (um aluno com erro não pode travar os outros)
 
-    // vencimento deste mês; se já passou, o do mês que vem
-    let venc = new Date(hoje.getFullYear(), hoje.getMonth(), m.dia_vencimento);
-    if (venc < hoje) venc = new Date(hoje.getFullYear(), hoje.getMonth() + 1, m.dia_vencimento);
+    try {
+      // vencimento deste mês; se já passou, o do mês que vem
+      let venc = new Date(hoje.getFullYear(), hoje.getMonth(), m.dia_vencimento);
+      if (venc < hoje) venc = new Date(hoje.getFullYear(), hoje.getMonth() + 1, m.dia_vencimento);
 
-    const faltam = (venc - hoje) / 86400000;
-    if (faltam > 7) continue;                                  // ainda não é hora
+      const faltam = (venc - hoje) / 86400000;
+      if (faltam > 7) continue;                                  // ainda não é hora
 
-    const ref = `${String(venc.getMonth() + 1).padStart(2, "0")}/${venc.getFullYear()}`;
-    const descricao = `Mensalidade ${ref} - ${a.nome}`;
+      const ref = `${String(venc.getMonth() + 1).padStart(2, "0")}/${venc.getFullYear()}`;
+      const descricao = `Mensalidade ${ref} - ${a.nome}`;
 
-    // não duplica
-    const { data: existe } = await db.from("cobrancas")
-      .select("id").eq("aluno_id", a.id).eq("descricao", descricao).maybeSingle();
-    if (existe) continue;
+      // não duplica
+      const { data: existe } = await db.from("cobrancas")
+        .select("id").eq("aluno_id", a.id).eq("descricao", descricao).maybeSingle();
+      if (existe) continue;
 
-    const unidade = a.turmas?.locais?.nome ?? "INSA";
-    const bolsista = a.bolsista;
+      const bolsista = a.bolsista;
 
-    const { data: cob, error: e2 } = await db.from("cobrancas").insert({
-      aluno_id: a.id,
-      local_id: a.turmas?.locais?.id,
-      descricao,
-      valor: bolsista ? 0 : m.valor_mensalidade,
-      vencimento: venc.toISOString().slice(0, 10),
-      status: bolsista ? "isento" : "aberto",
-    }).select().single();
-    if (e2) { console.error(e2); continue; }
+      if (!bolsista && !(Number(m.valor_mensalidade) > 0)) {
+        console.warn(`gerarCobrancasDoMes: ${a.nome} sem valor de mensalidade (R$0) e não é bolsista — pulado`);
+        continue;
+      }
 
-    if (bolsista) { criadas.push({ ...cob, isento: true }); continue; }
+      // mês já coberto por uma "Matrícula + Mensalidade" paga
+      if (!bolsista) {
+        const coberto = await vencimentoCobertoPelaMatricula(a.id, m.dia_vencimento);
+        if (coberto && dataIso(venc) <= coberto) continue;
+      }
 
-    const url = await criarLink({
-      id: cob.id, unidade, valor: cob.valor, descricao,
-      responsavel_nome: a.responsaveis?.nome,
-      responsavel_email: a.responsaveis?.email,
-      responsavel_telefone: a.responsaveis?.telefone,
-    });
+      const unidade = a.turmas?.locais?.nome ?? "INSA";
 
-    // enfileira o WhatsApp com o link
-    await db.from("mensagens").insert({
-      telefone: a.responsaveis.telefone,
-      aluno_id: a.id,
-      tipo: "cobranca_mensalidade",
-      corpo: `Oi, ${a.responsaveis.nome}! 🦁\n\nA mensalidade do(a) ${a.nome} vence dia ${m.dia_vencimento}.\n` +
-             `Valor: R$ ${Number(cob.valor).toFixed(2).replace(".", ",")}\n\n` +
-             `Pode pagar no Pix ou cartão por aqui:\n${url}\n\nQualquer dúvida é só chamar. Até a próxima aula! ⚽`,
-      agendada_para: new Date().toISOString(),
-    });
+      const { data: cob, error: e2 } = await db.from("cobrancas").insert({
+        aluno_id: a.id,
+        local_id: a.turmas?.locais?.id,
+        descricao,
+        valor: bolsista ? 0 : m.valor_mensalidade,
+        vencimento: dataIso(venc),
+        status: bolsista ? "isento" : "aberto",
+      }).select().single();
+      if (e2) { console.error(e2); continue; }
+      cobCriada = cob;
 
-    criadas.push(cob);
+      if (bolsista) { criadas.push({ ...cob, isento: true }); cobCriada = null; continue; }
+
+      const url = await criarLink({
+        id: cob.id, unidade, valor: cob.valor, descricao,
+        responsavel_nome: a.responsaveis?.nome,
+        responsavel_email: a.responsaveis?.email,
+        responsavel_telefone: a.responsaveis?.telefone,
+      });
+
+      // enfileira o WhatsApp com o link
+      await db.from("mensagens").insert({
+        telefone: a.responsaveis.telefone,
+        aluno_id: a.id,
+        tipo: "cobranca_mensalidade",
+        corpo: `Oi, ${a.responsaveis.nome}! 🦁\n\nA mensalidade do(a) ${a.nome} vence dia ${m.dia_vencimento}.\n` +
+               `Valor: R$ ${Number(cob.valor).toFixed(2).replace(".", ",")}\n\n` +
+               `Pode pagar no Pix ou cartão por aqui:\n${url}\n\nQualquer dúvida é só chamar. Até a próxima aula! ⚽`,
+        agendada_para: new Date().toISOString(),
+      });
+
+      criadas.push(cob);
+      cobCriada = null;
+    } catch (e) {
+      console.error(`gerarCobrancasDoMes: falhou pra ${a.nome}:`, e.message);
+      // cobrança criada sem link nem mensagem fica órfã e o "não duplica" a esconderia
+      // pra sempre — apaga pra tentar de novo no próximo ciclo
+      if (cobCriada) await db.from("cobrancas").delete().eq("id", cobCriada.id);
+    }
   }
   return criadas;
 }
@@ -158,6 +201,35 @@ export async function gerarCobrancasDoMes() {
    --------------------------------------------------------------- */
 export const router = express.Router();
 
+// data de hoje no Brasil — toISOString() dá o dia UTC e jogava pra "amanhã"
+// quem pagava depois das 21h
+const hojeBR = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+
+async function registrarBaixa(cob, { transaction_nsu, receipt_url, capture_method }, paid_amount) {
+  await db.from("cobrancas").update({
+    status: "pago",
+    pago_em: hojeBR(),
+    id_externo: transaction_nsu,
+    comprovante_url: receipt_url,
+    metodo: capture_method,
+  }).eq("id", cob.id);
+
+  // cancela cobrança/lembretes de atraso ainda na fila (a mensagem de cobrança do mês
+  // também: ela pode ficar horas na fila e sair depois de a família já ter pago)
+  await db.from("mensagens").update({ status: "cancelada" })
+    .eq("aluno_id", cob.aluno_id).eq("status", "na_fila")
+    .or("tipo.like.inadimplencia%,tipo.eq.cobranca_mensalidade");
+
+  // se estava suspenso por atraso, reativa
+  await db.from("alunos").update({ status: "ativo" })
+    .eq("id", cob.aluno_id).eq("status", "inadimplente");
+
+  // confere divergência de valor sem travar a baixa
+  if (paid_amount && Math.abs(paid_amount / 100 - Number(cob.valor)) > 0.01) {
+    console.warn(`Valor divergente na cobrança ${cob.id}: pago ${paid_amount / 100}, esperado ${cob.valor}`);
+  }
+}
+
 router.post("/api/infinitepay/webhook", express.json(), async (req, res) => {
   if (req.query.s !== process.env.WEBHOOK_SECRET) return res.status(401).send("nao autorizado");
 
@@ -167,32 +239,50 @@ router.post("/api/infinitepay/webhook", express.json(), async (req, res) => {
 
   try {
     const { data: cob } = await db.from("cobrancas")
-      .select("id, aluno_id, valor, status").eq("id", order_nsu).maybeSingle();
+      .select("id, aluno_id, valor, status, id_externo").eq("id", order_nsu).maybeSingle();
 
     if (!cob) { console.warn(`webhook infinitepay: cobranca ${order_nsu} não encontrada`); return res.status(400).send("cobranca desconhecida"); }   // força reenvio
-    if (cob.status === "pago") return res.status(200).send("ok");     // idempotente
 
-    await db.from("cobrancas").update({
-      status: "pago",
-      pago_em: new Date().toISOString().slice(0, 10),
-      id_externo: transaction_nsu,
-      comprovante_url: receipt_url,
-      metodo: capture_method,
-    }).eq("id", cob.id);
+    const dados = { transaction_nsu, receipt_url, capture_method };
 
-    // cancela lembretes de inadimplência ainda na fila
-    await db.from("mensagens").update({ status: "cancelada" })
-      .eq("aluno_id", cob.aluno_id).eq("status", "na_fila").like("tipo", "inadimplencia%");
-
-    // se estava suspenso por atraso, reativa
-    await db.from("alunos").update({ status: "ativo" })
-      .eq("id", cob.aluno_id).eq("status", "inadimplente");
-
-    // confere divergência de valor sem travar a baixa
-    if (paid_amount && Math.abs(paid_amount / 100 - Number(cob.valor)) > 0.01) {
-      console.warn(`Valor divergente na cobrança ${cob.id}: pago ${paid_amount / 100}, esperado ${cob.valor}`);
+    // link de uma cobrança que a equipe cancelou (ex.: duplicada): se o aluno tem outra
+    // cobrança aberta de valor compatível, é ela que fica paga — senão ela ficaria em
+    // aberto e a cancelada é que viraria "paga"
+    if (cob.status === "cancelado") {
+      const { data: abertas } = await db.from("cobrancas").select("id, aluno_id, valor, vencimento")
+        .eq("aluno_id", cob.aluno_id).in("status", ["aberto", "vencido"]).order("vencimento");
+      const alvo = (abertas ?? []).find((c) => !paid_amount || Math.abs(paid_amount / 100 - Number(c.valor)) <= 11);
+      if (alvo) {
+        await registrarBaixa(alvo, dados, paid_amount);
+        console.log(`webhook infinitepay: pagamento em link cancelado (${cob.id}) aplicado à cobrança aberta ${alvo.id}`);
+        return res.status(200).send("ok");
+      }
     }
 
+    if (cob.status === "pago") {
+      if (!cob.id_externo) {
+        // foi marcada como paga na mão antes de o pagamento cair — só completa o comprovante
+        await db.from("cobrancas").update({ id_externo: transaction_nsu, comprovante_url: receipt_url, metodo: capture_method }).eq("id", cob.id);
+        return res.status(200).send("ok");
+      }
+      if (!transaction_nsu || transaction_nsu === cob.id_externo) return res.status(200).send("ok");   // reenvio da mesma transação
+
+      // OUTRA transação num link que já estava pago: a família reaproveitou o link de um
+      // mês anterior (aconteceu em 01/10). Antes isso era descartado em silêncio e o mês
+      // novo ficava "em aberto" mesmo pago — agora vai pra cobrança aberta desse aluno.
+      const { data: abertas } = await db.from("cobrancas").select("id, aluno_id, valor, vencimento")
+        .eq("aluno_id", cob.aluno_id).in("status", ["aberto", "vencido"]).order("vencimento");
+      const alvo = (abertas ?? []).find((c) => !paid_amount || Math.abs(paid_amount / 100 - Number(c.valor)) <= 11);
+      if (alvo) {
+        await registrarBaixa(alvo, dados, paid_amount);
+        console.log(`webhook infinitepay: pagamento em link já pago (${cob.id}) aplicado à cobrança aberta ${alvo.id}`);
+      } else {
+        console.warn(`webhook infinitepay: PAGAMENTO EXTRA na cobrança já paga ${cob.id} (transação ${transaction_nsu}, R$${(paid_amount ?? 0) / 100}) e o aluno não tem cobrança aberta pra aplicar — conferir com a família`);
+      }
+      return res.status(200).send("ok");
+    }
+
+    await registrarBaixa(cob, dados, paid_amount);
     console.log(`webhook infinitepay: cobrança ${cob.id} marcada como paga`);
     return res.status(200).send("ok");
   } catch (e) {
@@ -207,31 +297,42 @@ router.post("/api/infinitepay/webhook", express.json(), async (req, res) => {
 export async function reguaInadimplencia() {
   const { data: vencidas } = await db
     .from("cobrancas")
-    .select("id, valor, vencimento, link_pagamento, alunos ( id, nome, responsaveis ( nome, telefone ) )")
+    .select("id, valor, vencimento, link_pagamento, alunos ( id, nome, status, responsaveis ( nome, telefone ) )")
     .in("status", ["aberto", "vencido"])
     .lt("vencimento", new Date().toISOString().slice(0, 10));
 
   for (const c of vencidas ?? []) {
-    const dias = Math.floor((Date.now() - new Date(c.vencimento)) / 86400000);
-    if (![1, 5, 10].includes(dias)) continue;
+    try {
+      const dias = Math.floor((Date.now() - new Date(c.vencimento)) / 86400000);
+      if (![1, 5, 10].includes(dias)) continue;
 
-    await db.from("cobrancas").update({ status: "vencido" }).eq("id", c.id);
-    if (dias >= 5) {
-      await db.from("alunos").update({ status: "inadimplente" }).eq("id", c.alunos.id);
+      // aluno que saiu não recebe lembrete — e, principalmente, não pode ser
+      // "reativado" como inadimplente (a baixa depois o devolvia como ativo)
+      if (c.alunos.status === "inativo") continue;
+      if (!c.alunos.responsaveis?.telefone) { console.warn(`reguaInadimplencia: ${c.alunos.nome} sem telefone do responsável`); continue; }
+
+      await db.from("cobrancas").update({ status: "vencido" }).eq("id", c.id);
+      if (dias >= 5) {
+        await db.from("alunos").update({ status: "inadimplente" }).eq("id", c.alunos.id);
+      }
+
+      const nome = c.alunos.responsaveis.nome;
+      const link = c.link_pagamento ? `\n${c.link_pagamento}` : "";
+      const textos = {
+        1: `Oi, ${nome}! Passando só pra lembrar que a mensalidade do(a) ${c.alunos.nome} venceu ontem — deve ter passado batido. 🦁 Se já pagou, pode ignorar:${link}`,
+        5: `Oi, ${nome}! A mensalidade do(a) ${c.alunos.nome} está com 5 dias de atraso. Pode regularizar por aqui:${link}`,
+        10: `Oi, ${nome}! A mensalidade do(a) ${c.alunos.nome} está com 10 dias de atraso. Pelo contrato, após 30 dias de inadimplência o aluno fica suspenso das atividades até a quitação. Vamos resolver antes disso?${link}`,
+      };
+
+      await db.from("mensagens").insert({
+        telefone: c.alunos.responsaveis.telefone,
+        aluno_id: c.alunos.id,
+        tipo: `inadimplencia_d${dias}`,
+        corpo: textos[dias],
+        agendada_para: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error(`reguaInadimplencia: falhou na cobrança ${c.id}:`, e.message);
     }
-
-    const textos = {
-      1: `Oi, ${c.alunos.responsaveis.nome}! Passando só pra lembrar que a mensalidade do(a) ${c.alunos.nome} venceu ontem — deve ter passado batido. 🦁 Se já pagou, pode ignorar:\n${c.link_pagamento}`,
-      5: `Oi, ${c.alunos.responsaveis.nome}! A mensalidade do(a) ${c.alunos.nome} está com 5 dias de atraso. Pode regularizar por aqui:\n${c.link_pagamento}`,
-      10: `Oi, ${c.alunos.responsaveis.nome}! A mensalidade do(a) ${c.alunos.nome} está com 10 dias de atraso. Pelo contrato, após 30 dias de inadimplência o aluno fica suspenso das atividades até a quitação. Vamos resolver antes disso?\n${c.link_pagamento}`,
-    };
-
-    await db.from("mensagens").insert({
-      telefone: c.alunos.responsaveis.telefone,
-      aluno_id: c.alunos.id,
-      tipo: `inadimplencia_d${dias}`,
-      corpo: textos[dias],
-      agendada_para: new Date().toISOString(),
-    });
   }
 }

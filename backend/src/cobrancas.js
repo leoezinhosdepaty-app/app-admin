@@ -28,6 +28,14 @@ router.post("/api/cobrancas", exigirAuth, express.json(), async (req, res) => {
   const local_id = aluno.turmas?.locais?.id;
   if (!unidade || !local_id) return res.status(400).json({ error: "aluno sem turma/unidade definida" });
 
+  // clique duplo / reenvio: reaproveita a cobrança igual criada há pouco em vez de
+  // abrir outra (duas cobranças pro mesmo mês = lembrete mesmo depois de pagar uma)
+  const haDezMin = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const { data: recente } = await db.from("cobrancas").select("id, link_pagamento")
+    .eq("aluno_id", aluno_id).eq("descricao", descricao).eq("valor", Number(valor))
+    .eq("status", "aberto").gte("criada_em", haDezMin).order("criada_em", { ascending: false }).limit(1).maybeSingle();
+  if (recente?.link_pagamento) return res.json({ cobranca: recente, url: recente.link_pagamento, reaproveitada: true });
+
   const { data: cob, error: erroCob } = await db.from("cobrancas").insert({
     aluno_id,
     local_id,

@@ -1202,18 +1202,30 @@ function FichaCobranca({ c, fechar, recarregar }) {
     const acabouDePagar = status === "pago" && c.status !== "pago";
     const { error } = await supabase.from("cobrancas").update({
       descricao, valor: Number(valor), vencimento, status,
-      ...(acabouDePagar ? { pago_em: new Date().toISOString().slice(0, 10), metodo: "manual" } : {}),
+      ...(acabouDePagar ? { pago_em: new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }), metodo: "manual" } : {}),
     }).eq("id", c.id);
     if (error) { setSalvando(false); setErro(error.message); return; }
 
-    if (acabouDePagar) {
-      // mesma coisa que o webhook da InfinitePay faria: cancela lembrete de atraso
+    const acabouDeCancelar = status === "cancelado" && c.status !== "cancelado";
+    if (acabouDePagar || acabouDeCancelar) {
+      // mesma coisa que o webhook da InfinitePay faria: cancela cobrança/lembrete de atraso
       // ainda na fila e reativa o aluno, senão ele continua marcado inadimplente
       // pra sempre mesmo já tendo pago (foi exatamente isso que gerou reclamação).
       await supabase.from("mensagens").update({ status: "cancelada" })
-        .eq("aluno_id", c.aluno_id).eq("status", "na_fila").like("tipo", "inadimplencia%");
-      await supabase.from("alunos").update({ status: "ativo" })
-        .eq("id", c.aluno_id).eq("status", "inadimplente");
+        .eq("aluno_id", c.aluno_id).eq("status", "na_fila")
+        .or("tipo.like.inadimplencia%,tipo.eq.cobranca_mensalidade");
+
+      let podeReativar = acabouDePagar;
+      if (acabouDeCancelar) {
+        // cancelar só tira o aluno de inadimplente se não sobrou nenhuma outra cobrança em aberto
+        const { data: outras } = await supabase.from("cobrancas").select("id")
+          .eq("aluno_id", c.aluno_id).in("status", ["aberto", "vencido"]).neq("id", c.id).limit(1);
+        podeReativar = !outras?.length;
+      }
+      if (podeReativar) {
+        await supabase.from("alunos").update({ status: "ativo" })
+          .eq("id", c.aluno_id).eq("status", "inadimplente");
+      }
     }
 
     setSalvando(false);
