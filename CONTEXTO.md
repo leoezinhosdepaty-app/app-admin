@@ -531,6 +531,11 @@ Pergunta: "quantos/quais alunos saíram este mês?" — o sistema não guardava 
 - Dados: João Pedro mello e Thomas Carvalho de Araújo → `fim=2026-10-16`; Miguel Fraga, Gael Goulart e Enzo Baptista tiveram a matrícula desativada sem data (saída anterior, data desconhecida). **João Lucas Ferreira** segue inativo com matrícula ativa **de propósito** (pausa até novembro, obs. "voltar a cobrar no mês 11").
 - Não foi possível rodar `ALTER TABLE` nesta sessão (conector do Supabase sem autorização) — se um dia quiser `alunos.inativado_em` separado do `fim` da matrícula, precisa de `ALTER TABLE alunos ADD COLUMN inativado_em timestamptz`.
 
+## Experimental vira Oportunidade + tela "Saídas do mês" (2026-10-20)
+
+- **Aula experimental agendada → Oportunidade**: "Oportunidade" = `conversas.oportunidade=true`. `marcarOportunidade(telefone, nome)` (`backend/src/oportunidades.js` e cópia no `App.jsx`) cria ou reaproveita a conversa (casa pelos 8 últimos dígitos, por causa do 55/9º dígito) e liga a flag. Dispara em 3 pontos: formulário público de experimental (`publico.js`), "Nova experimental" no painel e ao salvar uma data nova numa experimental existente. É por **evento**, não por varredura — de propósito: se a equipe desmarcar a oportunidade depois, nada religa sozinho. Nome da oportunidade: "Responsável · Aluno". Backfill: Bento Nunes Mourão e Enrico Ferraz (experimentais futuras).
+- **Saídas do mês** (botão em Alunos): navegação de mês, contagem de saídas (inativo cuja matrícula mais recente tem `fim` no mês) e de matrículas novas (`inicio` no mês), lista com turma/responsável/data. Embaixo, "Inativos sem data de saída" (saíram antes do registro existir) com campo de data pra preencher e entrar na conta do mês certo. Aluno pausado (inativo com matrícula ainda ativa, ex.: João Lucas) não entra em nenhuma das duas listas.
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.

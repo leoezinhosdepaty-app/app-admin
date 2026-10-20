@@ -231,6 +231,22 @@ async function enviarLinkConvite(tipo, telefone, nomeConversa) {
   if (error) throw error;
 }
 
+/* Marca o contato como Oportunidade (conversas.oportunidade) — usado quando uma aula
+   experimental é agendada: é um interessado que ainda não é aluno. Reaproveita a conversa
+   se já existir (casa pelos 8 últimos dígitos, por causa do 55 e do 9º dígito). */
+async function marcarOportunidade(telefone, nome) {
+  const d = String(telefone ?? "").replace(/\D/g, "");
+  const tel = d.length === 10 || d.length === 11 ? `55${d}` : d;
+  if (tel.length < 10) return;
+  const { data: existentes } = await supabase.from("conversas").select("telefone, nome").like("telefone", `%${tel.slice(-8)}`);
+  const existente = existentes?.[0];
+  if (existente) {
+    await supabase.from("conversas").update({ oportunidade: true, ...(existente.nome ? {} : { nome }) }).eq("telefone", existente.telefone);
+  } else {
+    await supabase.from("conversas").insert({ telefone: tel, nome, oportunidade: true });
+  }
+}
+
 /* ---------------------------- utilidades ---------------------------- */
 // "YYYY-MM-DD" é só uma data, sem hora — nunca passa por new Date() aqui, porque
 // isso vira meia-noite UTC e desloca um dia pra trás em fusos negativos (Brasil).
@@ -537,10 +553,111 @@ const UNIDADES = ["INSA", "MPAC", "KARATE"];
 
 const STATUS_ALUNO_FILTROS = ["Todos", "ativo", "pendente", "inativo"];
 
+/* Matrícula mais recente do aluno (a ativa, ou a de início mais novo). */
+const matriculaRecente = (a) => a.matriculas?.find((m) => m.ativa)
+  ?? [...(a.matriculas ?? [])].sort((x, y) => (y.inicio ?? "").localeCompare(x.inicio ?? ""))[0];
+
+function SaidasDoMes({ dados, carregando, erro, recarregar }) {
+  const hoje = new Date();
+  const [ano, setAno] = useState(hoje.getFullYear());
+  const [mes, setMes] = useState(hoje.getMonth() + 1);
+  const [datas, setDatas] = useState({});
+
+  const mudarMes = (delta) => {
+    let m = mes + delta, a = ano;
+    if (m < 1) { m = 12; a -= 1; }
+    if (m > 12) { m = 1; a += 1; }
+    setMes(m); setAno(a);
+  };
+  const prefixo = `${ano}-${String(mes).padStart(2, "0")}`;
+
+  const todos = dados ?? [];
+  const saidas = todos
+    .filter((a) => a.status === "inativo" && matriculaRecente(a)?.fim?.startsWith(prefixo))
+    .sort((x, y) => matriculaRecente(x).fim.localeCompare(matriculaRecente(y).fim));
+  const entradas = todos.filter((a) => (a.matriculas ?? []).some((m) => m.inicio?.startsWith(prefixo))).length;
+  // inativos antigos, de antes de a data de saída passar a ser registrada
+  const semData = todos.filter((a) => {
+    const m = matriculaRecente(a);
+    return a.status === "inativo" && m && !m.ativa && !m.fim;
+  });
+
+  const salvarData = async (a) => {
+    const m = matriculaRecente(a);
+    const d = datas[a.id];
+    if (!m || !d) return;
+    const { error } = await supabase.from("matriculas").update({ fim: d }).eq("id", m.id);
+    if (!error) recarregar();
+  };
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center gap-2">
+        <button onClick={() => mudarMes(-1)} aria-label="Mês anterior" className="px-2 text-sm" style={{ color: "#7A85A3" }}>◀</button>
+        <span className="text-sm font-semibold" style={{ color: NAVY }}>{MESES_NOME[mes - 1]}/{ano}</span>
+        <button onClick={() => mudarMes(1)} aria-label="Mês seguinte" className="px-2 text-sm" style={{ color: "#7A85A3" }}>▶</button>
+      </div>
+
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <Card><p className="text-xs uppercase" style={{ color: "#7A85A3" }}>Saídas</p>
+          <p className="mt-1 text-xl font-bold" style={{ color: CLAY }}>{saidas.length}</p></Card>
+        <Card><p className="text-xs uppercase" style={{ color: "#7A85A3" }}>Matrículas novas</p>
+          <p className="mt-1 text-xl font-bold" style={{ color: NAVY }}>{entradas}</p></Card>
+      </div>
+
+      <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={false}>
+        {saidas.length === 0 ? (
+          <Card><p className="text-sm" style={{ color: "#5C678A" }}>Nenhuma saída registrada em {MESES_NOME[mes - 1]}/{ano}.</p></Card>
+        ) : (
+          <div className="space-y-2">
+            {saidas.map((a) => (
+              <Card key={a.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold" style={{ color: NAVY }}>{a.nome}</p>
+                    <p className="truncate text-xs" style={{ color: "#5C678A" }}>
+                      {turmaTxt(a.turmas)} · Responsável: {a.responsaveis?.nome ?? "—"}
+                    </p>
+                  </div>
+                  <p className="shrink-0 text-sm font-semibold" style={{ color: CLAY }}>saiu em {dataBr(matriculaRecente(a).fim)}</p>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {semData.length > 0 && (
+          <div className="mt-6">
+            <h3 className="mb-1 font-bold" style={{ color: NAVY }}>Inativos sem data de saída</h3>
+            <p className="mb-3 text-xs" style={{ color: "#5C678A" }}>
+              Saíram antes de o sistema registrar a data. Se souber quando, informe pra entrar na conta do mês certo.
+            </p>
+            <div className="space-y-2">
+              {semData.map((a) => (
+                <Card key={a.id}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="min-w-0 truncate font-semibold" style={{ color: NAVY }}>{a.nome}</p>
+                    <div className="flex items-center gap-2">
+                      <input type="date" value={datas[a.id] ?? ""} onChange={(e) => setDatas((d) => ({ ...d, [a.id]: e.target.value }))}
+                        className="rounded-lg border px-2 py-1 text-xs" style={{ borderColor: "#E6E9F2" }} />
+                      <Botao tom="ghost" onClick={() => salvarData(a)} disabled={!datas[a.id]}>Salvar</Botao>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+      </Estado>
+    </div>
+  );
+}
+
 function Alunos() {
   const { dados, erro, carregando, recarregar } = useQuery("alunos", qAlunos);
   const { dados: categorias } = useQuery("categorias-ativas", qCategoriasAtivas);
   const { dados: turmas } = useQuery("turmas-ativas", qTurmasAtivas);
+  const [verSaidas, setVerSaidas] = useState(false);
   const [busca, setBusca] = useState("");
   const [local, setLocal] = useState("Todos");
   const [turmaFiltro, setTurmaFiltro] = useState("Todas");
@@ -560,9 +677,23 @@ function Alunos() {
     (statusFiltro === "Todos" || a.status === statusFiltro)
   ), [dados, busca, local, turmaFiltro, statusFiltro]);
 
+  if (verSaidas) {
+    return (
+      <div>
+        <Titulo acao={<Botao tom="ghost" onClick={() => setVerSaidas(false)}>← Alunos</Botao>}>Saídas do mês</Titulo>
+        <SaidasDoMes dados={dados} carregando={carregando} erro={erro} recarregar={recarregar} />
+      </div>
+    );
+  }
+
   return (
     <div>
-      <Titulo acao={<Botao icon={Plus} onClick={() => setCriando(true)}>Novo aluno</Botao>}>Alunos</Titulo>
+      <Titulo acao={
+        <div className="flex gap-2">
+          <Botao tom="ghost" onClick={() => setVerSaidas(true)}>Saídas do mês</Botao>
+          <Botao icon={Plus} onClick={() => setCriando(true)}>Novo aluno</Botao>
+        </div>
+      }>Alunos</Titulo>
 
       <div className="mb-2 flex flex-wrap gap-2">
         <div className="flex flex-1 items-center gap-2 rounded-xl bg-white px-3 py-2">
@@ -1088,6 +1219,9 @@ function CardExperimental({ e, recarregar }) {
     const { error } = await supabase.from("experimentais").update({ data_aula: data || null }).eq("id", e.id);
     if (error) { setSalvandoData(false); return; }
 
+    // aula marcada = interessado entra em Oportunidades
+    if (mudou && data && e.telefone) await marcarOportunidade(e.telefone, `${e.responsavel_nome} · ${e.aluno_nome}`).catch(() => {});
+
     // avisa a família pelo WhatsApp só quando uma data nova de verdade foi marcada
     if (mudou && data && e.telefone) {
       const dataFormatada = new Date(data).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
@@ -1195,6 +1329,7 @@ function Experimentais() {
               categoria: v.categoria || null, turma_id: v.turma_id || null, data_aula: v.data_aula || null,
             });
             if (error) throw error;
+            await marcarOportunidade(v.telefone, `${v.responsavel_nome} · ${v.aluno_nome}`).catch(() => {});
             recarregar();
           }} />
       )}

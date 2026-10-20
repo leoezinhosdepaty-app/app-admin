@@ -2,6 +2,7 @@ import express from "express";
 import { db } from "./db.js";
 import { criarLink } from "./infinitepay.js";
 import { montarTextoContrato, montarTextoParaLeitura, gerarESalvarContrato } from "./contrato.js";
+import { marcarOportunidade } from "./oportunidades.js";
 
 export const router = express.Router();
 router.use(express.json({ limit: "5mb" })); // rota pública recebe foto do aluno em base64 — 100kb (padrão) estoura fácil
@@ -72,6 +73,9 @@ router.post("/api/publico/convite/:token/experimental", async (req, res) => {
     turma_id: turma_id || null, categoria: categoria || null, data_aula: data_aula || null, origem: `convite:${convite.token}`,
   }).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  // quem agenda experimental entra em Oportunidades (não pode travar o formulário se falhar)
+  await marcarOportunidade(telefone, `${responsavel_nome} · ${aluno_nome}`).catch((e) => console.error("marcarOportunidade:", e.message));
 
   await db.from("convites").update({ usado_em: new Date().toISOString() }).eq("id", convite.id);
   return res.json({ experimental: data });
