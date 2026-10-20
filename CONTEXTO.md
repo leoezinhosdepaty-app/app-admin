@@ -523,6 +523,14 @@ Reclamações de responsáveis cobrados mesmo tendo pago (Luana/Caetano, Monica/
 - Itens da "Loja Online" da InfinitePay (uniformes, não mensalidade): R$150 = uniforme normal, R$200 = uniforme de frio — o Pix de R$150 da Gabriela Barreto Aranda (02/10, Conta Inteligente) é uniforme, não mensalidade.
 - (antes das respostas) Sobraram 16 cobranças em aberto/vencidas **sem nenhum pagamento nos relatórios** (ou seja, ou devem de fato, ou pagaram fora da InfinitePay): Benjamin, João Pedro mello, Pedro e Bento Queiroz Curityba, Fábio Silva, Arthur Cunha Pena, Luca de carvalho mendanha, Rafael Rodrigues Teixeira, Davi Neves, Thomas Carvalho de Araújo, Miguel Fraga, João Arthur e José Alfredo (Marcio Montes) + a vencer: Kaleb, Henrique, Josué. A Priscila já havia dito que Benjamin (Rafael Moura), Kaleb (Patrícia Monteiro), Henrique (Elaine Ornelas) e João Pedro Monteiro (Monica) pagam por fora.
 
+## Data de matrícula e de inativação (2026-10-20)
+
+Pergunta: "quantos/quais alunos saíram este mês?" — o sistema não guardava quando alguém virou inativo. Causa de sobrar **inativo com matrícula ativa**: o botão de status na Ficha (`alternarStatus`) só mudava `alunos.status` e nunca mexia em `matriculas`.
+
+- **Sem coluna nova** — `matriculas` já tinha `inicio` (data de matrícula, sempre preenchida) e `fim`, nunca usada. Agora: **inativar** → matrícula ativa vira `ativa=false, fim=hoje (fuso Brasil)`; **reativar** → reabre a matrícula mais recente (`ativa=true, fim=null`, mantém o `inicio` original). A Ficha mostra "Matrícula: desde dd/mm/aaaa" e, se inativo, "Inativo desde dd/mm/aaaa" (ou "data não registrada" pros antigos).
+- Dados: João Pedro mello e Thomas Carvalho de Araújo → `fim=2026-10-16`; Miguel Fraga, Gael Goulart e Enzo Baptista tiveram a matrícula desativada sem data (saída anterior, data desconhecida). **João Lucas Ferreira** segue inativo com matrícula ativa **de propósito** (pausa até novembro, obs. "voltar a cobrar no mês 11").
+- Não foi possível rodar `ALTER TABLE` nesta sessão (conector do Supabase sem autorização) — se um dia quiser `alunos.inativado_em` separado do `fim` da matrícula, precisa de `ALTER TABLE alunos ADD COLUMN inativado_em timestamptz`.
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.

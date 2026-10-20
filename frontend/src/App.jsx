@@ -128,7 +128,7 @@ const qAlunos = () => supabase
   .select(`id, nome, nascimento, categoria, tamanho_uniforme, bolsista, status, observacoes, foto_url,
            responsaveis ( id, nome, telefone, cpf, email ),
            turmas ( id, dias, horario, locais ( id, nome ) ),
-           matriculas ( id, plano_id, valor_mensalidade, dia_vencimento, ativa, planos ( nome ) ),
+           matriculas ( id, plano_id, valor_mensalidade, dia_vencimento, ativa, inicio, fim, planos ( nome ) ),
            documentos ( tipo, assinado_em ),
            anamneses ( doenca_preexistente, problema_fisico, condicao_neurologica, remedio_controlado,
                        plano_saude, cartao_sus, contato_emergencia, autoriza_medico, preenchida_em ),
@@ -676,6 +676,7 @@ const CardAcao = ({ titulo, children }) => (
 function Ficha({ a, fechar, recarregar }) {
   const { role } = usePerfil();
   const mat = a.matriculas?.find((m) => m.ativa);
+  const matRecente = mat ?? [...(a.matriculas ?? [])].sort((x, y) => (y.inicio ?? "").localeCompare(x.inicio ?? ""))[0];
   const pend = pendenciasDe(a);
   const { dados: turmas } = useQuery("turmas-ativas", qTurmasAtivas);
   const { dados: planos } = useQuery("planos-ativos", qPlanosAtivos);
@@ -714,7 +715,20 @@ function Ficha({ a, fechar, recarregar }) {
   const alternarStatus = async () => {
     const novo = status === "ativo" ? "inativo" : "ativo";
     const { error } = await supabase.from("alunos").update({ status: novo }).eq("id", a.id);
-    if (!error) { setStatus(novo); recarregar?.(); }
+    if (error) return;
+
+    // a matrícula acompanha o status — antes só o status mudava e sobravam inativos com
+    // matrícula ativa (inflava o "previsto" do Painel). "fim" guarda a data de inativação.
+    const hoje = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+    if (novo === "inativo") {
+      await supabase.from("matriculas").update({ ativa: false, fim: hoje }).eq("aluno_id", a.id).eq("ativa", true);
+    } else {
+      // reativar reabre a matrícula mais recente (mantém a data original de matrícula)
+      const ultima = [...(a.matriculas ?? [])].sort((x, y) => (y.inicio ?? "").localeCompare(x.inicio ?? ""))[0];
+      if (ultima && !ultima.ativa) await supabase.from("matriculas").update({ ativa: true, fim: null }).eq("id", ultima.id);
+    }
+    setStatus(novo);
+    recarregar?.();
   };
 
   const apagarAluno = async () => {
@@ -765,6 +779,8 @@ function Ficha({ a, fechar, recarregar }) {
     ["Turma", turmaTxt(a.turmas)],
     ["Plano", mat ? <>{mat.planos?.nome} — <Valor>{brl(mat.valor_mensalidade)}</Valor></> : "Sem matrícula ativa"],
     ["Vencimento", mat ? `todo dia ${mat.dia_vencimento}` : "—"],
+    ["Matrícula", matRecente?.inicio ? `desde ${dataBr(matRecente.inicio)}` : "—"],
+    ...(status === "inativo" ? [["Inativo desde", matRecente?.fim ? dataBr(matRecente.fim) : "data não registrada"]] : []),
     ["Bolsista", a.bolsista ? "Sim" : "Não"],
     ["Uniforme", a.tamanho_uniforme || "—"],
     ["Responsável", `${a.responsaveis?.nome ?? "—"} · ${a.responsaveis?.telefone ?? "—"}`],
