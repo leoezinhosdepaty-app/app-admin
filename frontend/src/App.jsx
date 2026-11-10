@@ -670,12 +670,19 @@ function Alunos() {
     [turmas, local]
   );
 
-  const lista = useMemo(() => (dados ?? []).filter((a) =>
+  // mesmo critério da lista, parametrizado — assim cada botão/opção mostra quantos alunos
+  // sobrariam se ele fosse escolhido, mantendo os outros filtros como estão
+  const passa = (a, f) =>
     a.nome?.toLowerCase().includes(busca.toLowerCase()) &&
-    (local === "Todos" || a.turmas?.locais?.nome === local) &&
-    (turmaFiltro === "Todas" || a.turmas?.id === turmaFiltro) &&
-    (statusFiltro === "Todos" || a.status === statusFiltro)
-  ), [dados, busca, local, turmaFiltro, statusFiltro]);
+    (f.local === "Todos" || a.turmas?.locais?.nome === f.local) &&
+    (f.turma === "Todas" || a.turmas?.id === f.turma) &&
+    (f.status === "Todos" || a.status === f.status);
+  const conta = (f) => (dados ?? []).filter((a) => passa(a, f)).length;
+  const atual = { local, turma: turmaFiltro, status: statusFiltro };
+
+  const lista = useMemo(() => (dados ?? []).filter((a) => passa(a, atual)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dados, busca, local, turmaFiltro, statusFiltro]);
 
   if (verSaidas) {
     return (
@@ -703,25 +710,41 @@ function Alunos() {
         </div>
         {["Todos", ...UNIDADES].map((l) => (
           <button key={l} onClick={() => { setLocal(l); setTurmaFiltro("Todas"); }} className="rounded-xl px-3 py-2 text-sm font-semibold"
-            style={local === l ? { background: NAVY, color: "#fff" } : { background: "#fff", color: NAVY }}>{l}</button>
+            style={local === l ? { background: NAVY, color: "#fff" } : { background: "#fff", color: NAVY }}>
+            {l}{dados ? ` (${conta({ local: l, turma: "Todas", status: statusFiltro })})` : ""}
+          </button>
         ))}
         <select value={turmaFiltro} onChange={(e) => setTurmaFiltro(e.target.value)}
           className="rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#E6E9F2", color: NAVY }}>
-          <option value="Todas">Todas as turmas</option>
+          <option value="Todas">Todas as turmas ({conta({ local, turma: "Todas", status: statusFiltro })})</option>
           {turmasDoFiltro.map((t) => (
-            <option key={t.id} value={t.id}>{turmaTxt(t)}</option>
+            <option key={t.id} value={t.id}>{turmaTxt(t)} ({conta({ local, turma: t.id, status: statusFiltro })})</option>
           ))}
         </select>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-2 flex flex-wrap gap-2">
         {STATUS_ALUNO_FILTROS.map((s) => (
           <button key={s} onClick={() => setStatusFiltro(s)} className="rounded-xl px-3 py-2 text-xs font-semibold"
             style={statusFiltro === s ? { background: LIME, color: NAVY } : { background: "#fff", color: "#5C678A" }}>
-            {s === "Todos" ? "Todos" : STATUS[s]?.txt ?? s}
+            {s === "Todos" ? "Todos" : STATUS[s]?.txt ?? s}{dados ? ` (${conta({ ...atual, status: s })})` : ""}
           </button>
         ))}
       </div>
+
+      {dados && (
+        <p className="mb-4 text-sm font-semibold" style={{ color: NAVY }}>
+          {lista.length} {lista.length === 1 ? "aluno" : "alunos"}
+          <span className="font-normal" style={{ color: "#5C678A" }}>
+            {" · "}
+            {[
+              turmaFiltro !== "Todas" ? turmaTxt(turmas?.find((t) => t.id === turmaFiltro)) : local !== "Todos" && local,
+              statusFiltro !== "Todos" && (STATUS[statusFiltro]?.txt ?? statusFiltro),
+              busca.trim() && `"${busca.trim()}"`,
+            ].filter(Boolean).join(" · ") || "todos"}
+          </span>
+        </p>
+      )}
 
       <Estado carregando={carregando} erro={erro} recarregar={recarregar} vazio={lista.length === 0}>
         <div className="space-y-2">
