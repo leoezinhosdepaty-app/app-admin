@@ -33,6 +33,19 @@ async function chamarInfinitePay(body) {
 }
 
 /* ---------------------------------------------------------------
+   Link curto: o link de checkout da InfinitePay tem ~400 caracteres e deixa a mensagem
+   enorme. Mandamos `APP_URL/p/<código>`, que redireciona pro link real. O código é o
+   uuid da cobrança em base64url (22 caracteres) — sem coluna nova, é só reversível.
+   --------------------------------------------------------------- */
+export const codigoCurto = (uuid) => Buffer.from(String(uuid).replace(/-/g, ""), "hex").toString("base64url");
+const uuidDoCodigo = (codigo) => {
+  const h = Buffer.from(String(codigo), "base64url").toString("hex");
+  return h.length === 32 ? `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}` : null;
+};
+export const linkCurtoCobranca = (cobrancaId) => `${process.env.APP_URL}/p/${codigoCurto(cobrancaId)}`;
+export const linkCurtoEvento = (eventoId) => `${process.env.APP_URL}/e/${codigoCurto(eventoId)}`;
+
+/* ---------------------------------------------------------------
    1) Criar o link de uma cobrança
    Valores vão em CENTAVOS. order_nsu é a chave da conciliação:
    é ele que volta no webhook e diz de quem foi o pagamento.
@@ -179,7 +192,7 @@ export async function gerarCobrancasDoMes() {
         tipo: "cobranca_mensalidade",
         corpo: `Oi, ${a.responsaveis.nome}! 🦁\n\nA mensalidade do(a) ${a.nome} vence dia ${m.dia_vencimento}.\n` +
                `Valor: R$ ${Number(cob.valor).toFixed(2).replace(".", ",")}\n\n` +
-               `Pode pagar no Pix ou cartão por aqui:\n${url}\n\nQualquer dúvida é só chamar. Até a próxima aula! ⚽`,
+               `Pode pagar no Pix ou cartão por aqui:\n${linkCurtoCobranca(cob.id)}\n\nQualquer dúvida é só chamar. Até a próxima aula! ⚽`,
         agendada_para: new Date().toISOString(),
       });
 
@@ -229,6 +242,15 @@ async function registrarBaixa(cob, { transaction_nsu, receipt_url, capture_metho
     console.warn(`Valor divergente na cobrança ${cob.id}: pago ${paid_amount / 100}, esperado ${cob.valor}`);
   }
 }
+
+async function redirecionar(res, tabela, codigo) {
+  const id = uuidDoCodigo(codigo);
+  const { data } = id ? await db.from(tabela).select("link_pagamento").eq("id", id).maybeSingle() : { data: null };
+  if (!data?.link_pagamento) return res.status(404).send("Link não encontrado.");
+  return res.redirect(302, data.link_pagamento);
+}
+router.get("/p/:codigo", (req, res) => redirecionar(res, "cobrancas", req.params.codigo).catch(() => res.status(500).send("erro")));
+router.get("/e/:codigo", (req, res) => redirecionar(res, "eventos", req.params.codigo).catch(() => res.status(500).send("erro")));
 
 router.post("/api/infinitepay/webhook", express.json(), async (req, res) => {
   if (req.query.s !== process.env.WEBHOOK_SECRET) return res.status(401).send("nao autorizado");
@@ -317,7 +339,7 @@ export async function reguaInadimplencia() {
       }
 
       const nome = c.alunos.responsaveis.nome;
-      const link = c.link_pagamento ? `\n${c.link_pagamento}` : "";
+      const link = c.link_pagamento ? `\n${linkCurtoCobranca(c.id)}` : "";
       const textos = {
         1: `Oi, ${nome}! Passando só pra lembrar que a mensalidade do(a) ${c.alunos.nome} venceu ontem — deve ter passado batido. 🦁 Se já pagou, pode ignorar:${link}`,
         5: `Oi, ${nome}! A mensalidade do(a) ${c.alunos.nome} está com 5 dias de atraso. Pode regularizar por aqui:${link}`,

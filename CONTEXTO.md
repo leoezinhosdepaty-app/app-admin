@@ -541,6 +541,16 @@ Pergunta: "quantos/quais alunos saíram este mês?" — o sistema não guardava 
 - **Alunos**: a lista agora mostra "N alunos · filtros aplicados" (ex.: "12 alunos · INSA 3ª e 5ª 19:00 · Ativo"), e cada botão/opção de filtro traz entre parênteses quantos alunos sobrariam se fosse escolhido, mantendo os outros filtros (unidade, turma, status, busca). Função `passa`/`conta` em `Alunos()`.
 - **João Lucas Ferreira (mãe Lucelia) recebeu "Lembrete rápido: você tem uma cobrança de futleoezinhos... R$160, vencimento 15/11" (invoice.infinitepay.io)** — **não é mensagem do nosso app** (o nosso diz "Oi, X! 🦁 A mensalidade do(a)..." com link checkout.infinitepay.io). É o aviso nativo da **recorrência antiga "Gestão de Cobrança" da InfinitePay**, ainda ativa pra ele. No banco ele está inativo, sem cobrança em outubro/novembro e sem mensagem nossa. A mãe encaminhou o aviso pro WhatsApp em 08/11 (disse que pediu baixa e teme "ir pro serasa"). Só se resolve **cancelando a recorrência dele no painel da InfinitePay** — mesma causa dos casos Arthur (Janine Cabral) e Théo Carneiro/Damasceno. A observação dele ("voltar a cobrar no mês 11") e o pedido da mãe de dar baixa se contradizem — a Priscila precisa definir se ele volta ou saiu.
 
+## Link de pagamento curto (2026-11-10)
+
+O link de checkout da InfinitePay tem ~520 caracteres e deixava a mensagem de cobrança enorme. Agora a mensagem leva `https://api-leoezinhos.menuccisd.com.br/p/<código>` (**64 caracteres**), que responde `302` pro link real.
+
+- **Sem coluna nova**: o código é o uuid da cobrança em base64url (22 caracteres, reversível — `codigoCurto`/`uuidDoCodigo` em `infinitepay.js`; cópia `codigoCurto` no `App.jsx`, os dois conferidos). `/p/<código>` lê `cobrancas.link_pagamento`; `/e/<código>` faz o mesmo pra `eventos.link_pagamento` (divulgação de evento). Código inválido ou sem link → 404. Rotas públicas (sem auth), no router da InfinitePay.
+- Usado em: mensagem de cobrança mensal, régua de atraso (d1/d5/d10), "Confirmar cobrança" da Ficha (`/api/cobrancas` devolve o link curto), botão "Enviar Cobrança" do card Inadimplentes e divulgação de evento. `cobrancas.link_pagamento` continua guardando o link longo (é ele que o redirect lê).
+- Mensagens **já enviadas ou já na fila** continuam com o link longo (que segue funcionando); só as novas saem curtas.
+- Depende de `APP_URL` (produção = domínio da API) — se o domínio mudar, os links curtos já enviados quebram.
+- Armadilha: ao editar o `App.jsx` por script, escapes de regex (`\+`, `\/`) se perdem e o build quebra — preferir `.replaceAll("+", "-")`.
+
 ## Pendências de informação
 
 - **João Miguel Silva Oliveira sem foto cadastrada** — a mensagem de aniversário pro grupo interno sai só com texto pra ele até alguém subir uma foto pelo cadastro do aluno no app.

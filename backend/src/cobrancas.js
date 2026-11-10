@@ -1,7 +1,7 @@
 import express from "express";
 import { db } from "./db.js";
 import { exigirAuth } from "./auth.js";
-import { criarLink } from "./infinitepay.js";
+import { criarLink, linkCurtoCobranca } from "./infinitepay.js";
 
 export const router = express.Router();
 
@@ -34,7 +34,7 @@ router.post("/api/cobrancas", exigirAuth, express.json(), async (req, res) => {
   const { data: recente } = await db.from("cobrancas").select("id, link_pagamento")
     .eq("aluno_id", aluno_id).eq("descricao", descricao).eq("valor", Number(valor))
     .eq("status", "aberto").gte("criada_em", haDezMin).order("criada_em", { ascending: false }).limit(1).maybeSingle();
-  if (recente?.link_pagamento) return res.json({ cobranca: recente, url: recente.link_pagamento, reaproveitada: true });
+  if (recente?.link_pagamento) return res.json({ cobranca: recente, url: linkCurtoCobranca(recente.id), reaproveitada: true });
 
   const { data: cob, error: erroCob } = await db.from("cobrancas").insert({
     aluno_id,
@@ -53,7 +53,7 @@ router.post("/api/cobrancas", exigirAuth, express.json(), async (req, res) => {
       responsavel_email: aluno.responsaveis?.email,
       responsavel_telefone: aluno.responsaveis?.telefone,
     });
-    return res.json({ cobranca: cob, url });
+    return res.json({ cobranca: cob, url: linkCurtoCobranca(cob.id) });
   } catch (e) {
     return res.status(502).json({ error: e.message, cobranca: cob });
   }

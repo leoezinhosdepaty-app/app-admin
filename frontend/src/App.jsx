@@ -29,6 +29,13 @@ async function apiAuth(metodo, path, body) {
   return json;
 }
 const apiPost = (path, body) => apiAuth("POST", path, body);
+
+/* Link curto de pagamento (o de checkout da InfinitePay tem ~400 caracteres): o backend
+   redireciona /p/<código> pro link real. Código = uuid da cobrança em base64url. */
+const codigoCurto = (uuid) => btoa(String.fromCharCode(...String(uuid).replace(/-/g, "").match(/../g).map((h) => parseInt(h, 16))))
+  .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+const linkCurtoCobranca = (id) => `${API_URL}/p/${codigoCurto(id)}`;
+const linkCurtoEvento = (id) => `${API_URL}/e/${codigoCurto(id)}`;
 const apiGet = (path) => apiAuth("GET", path);
 
 /* Baixa um PDF de um endpoint autenticado e abre numa aba nova (o navegador
@@ -1484,7 +1491,7 @@ function CardInadimplente({ a }) {
     try {
       if (!a.responsaveis?.telefone) throw new Error("Responsável sem telefone cadastrado");
       const texto = `Oi, ${a.responsaveis.nome}! A mensalidade do(a) ${a.nome} está em atraso.` +
-        (cobrancaAberta?.link_pagamento ? ` Pode regularizar por aqui:\n${cobrancaAberta.link_pagamento}` : " Vamos regularizar?");
+        (cobrancaAberta?.link_pagamento ? ` Pode regularizar por aqui:\n${linkCurtoCobranca(cobrancaAberta.id)}` : " Vamos regularizar?");
       const { error } = await supabase.from("mensagens").insert({
         telefone: a.responsaveis.telefone, direcao: "saida", tipo: "cobranca_manual",
         corpo: texto, status: "na_fila", agendada_para: new Date().toISOString(),
@@ -2056,7 +2063,7 @@ function DivulgarEvento({ evento, fechar }) {
       }
 
       const telefones = await buscarTelefonesDestinatarios(destinatarios);
-      const corpo = texto.replaceAll("{{link_pagamento}}", evento.link_pagamento ?? "");
+      const corpo = texto.replaceAll("{{link_pagamento}}", evento.link_pagamento ? linkCurtoEvento(evento.id) : "");
       const agora = new Date().toISOString();
       const linhas = telefones.map((telefone) => ({
         telefone, tipo: "divulgacao_evento", direcao: "saida", status: "na_fila",
